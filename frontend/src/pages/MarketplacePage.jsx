@@ -54,17 +54,14 @@ import {
   ArrowDropDown,
   Folder,
   Schema,
+  Archive,
+  Info,
 } from '@mui/icons-material';
 
 const MarketplacePage = () => {
-  const [resourceType, setResourceType] = useState('GCP');
-  const [gcpProject, setGcpProject] = useState('');
-  const [dataset, setDataset] = useState('');
-  const [tableName, setTableName] = useState('');
-  
-  // Starburst-specific state variables
+  const [resourceType, setResourceType] = useState('Parquet Files');
   const [catalog, setCatalog] = useState('');
-  const [schema, setSchema] = useState('');
+  const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
   const [tableData, setTableData] = useState(null);
   const [error, setError] = useState(null);
@@ -72,121 +69,25 @@ const MarketplacePage = () => {
   // Tag management states
   const [columnTagDialogOpen, setColumnTagDialogOpen] = useState(false);
   const [tableTagDialogOpen, setTableTagDialogOpen] = useState(false);
-  const [catalogTagDialogOpen, setCatalogTagDialogOpen] = useState(false);
-  const [schemaTagDialogOpen, setSchemaTagDialogOpen] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState(null);
   const [selectedColumnForTag, setSelectedColumnForTag] = useState('');
   const [newTag, setNewTag] = useState('');
-  const [catalogTag, setCatalogTag] = useState(null);
-  const [schemaTag, setSchemaTag] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [sqlDialogOpen, setSqlDialogOpen] = useState(false);
-  const [sqlCommands, setSqlCommands] = useState([]);
   const [billingInfo, setBillingInfo] = useState({ requiresBilling: false, message: '' });
-  const [maskedViewSQL, setMaskedViewSQL] = useState('');
-  const [maskedViewCreated, setMaskedViewCreated] = useState(false);
-  const [maskedViewName, setMaskedViewName] = useState('');
-  const [maskedViewError, setMaskedViewError] = useState('');
-  const [recommendedTagsDialogOpen, setRecommendedTagsDialogOpen] = useState(false);
-  const [recommendedTags, setRecommendedTags] = useState({});
-  const [existingTags, setExistingTags] = useState([]);
-  const [connectors, setConnectors] = useState([]);
   const [piiDialogOpen, setPiiDialogOpen] = useState(false);
   const [selectedColumnForPii, setSelectedColumnForPii] = useState(null);
+  const [recommendedTagsDialogOpen, setRecommendedTagsDialogOpen] = useState(false);
+  const [recommendedTags, setRecommendedTags] = useState({});
   const [tagMenuAnchor, setTagMenuAnchor] = useState(null);
 
-  // Fetch connectors from backend
-  const fetchConnectors = async () => {
-    try {
-      const response = await fetch('http://localhost:8099/api/connectors');
-      if (response.ok) {
-        const data = await response.json();
-        setConnectors(data || []);
-      }
-    } catch (err) {
-      console.error('Error fetching connectors:', err);
-    }
-  };
-
-  // Load connectors on component mount
-  useEffect(() => {
-    fetchConnectors();
-  }, []);
-
-  // Clear form fields when resource type changes
-  useEffect(() => {
-    // Clear all form fields when switching resource types
-    setGcpProject('');
-    setDataset('');
-    setTableName('');
-    setCatalog('');
-    setSchema('');
-    setTableData(null);
-    setError(null);
-    setCatalogTag(null);
-    setSchemaTag(null);
-  }, [resourceType]);
-
-  // Fetch existing tags
-  const fetchExistingTags = async () => {
-    try {
-      let apiUrl = '';
-      if (resourceType === 'GCP') {
-        apiUrl = 'http://localhost:8099/api/bigquery/all-tags';
-      } else if (resourceType === 'Starburst Galaxy') {
-        apiUrl = 'http://localhost:8099/api/starburst/all-tags';
-      }
-      
-      if (apiUrl) {
-        const response = await fetch(apiUrl);
-        const data = await response.json();
-        setExistingTags(data.tags || []);
-      }
-    } catch (err) {
-      console.error('Error fetching existing tags:', err);
-    }
-  };
-
-  // Helper function to get connector ID for a specific project
-  const getConnectorIdForProject = (projectId) => {
-    // Find BigQuery connector that matches the project ID
-    const bigqueryConnector = connectors.find(connector => 
-      connector.type === 'BigQuery' && 
-      connector.enabled && 
-      connector.config?.project_id === projectId
-    );
-    return bigqueryConnector ? bigqueryConnector.id : null;
-  };
-
-  // Helper function to get Starburst connector ID
-  const getStarburstConnectorId = () => {
-    // Find any enabled Starburst connector
-    const starburstConnector = connectors.find(connector => 
-      connector.type === 'Starburst Galaxy' && 
-      connector.enabled
-    );
-    return starburstConnector ? starburstConnector.id : null;
-  };
-
   const handleSearch = async () => {
-    // Check required fields based on resource type
-    if (resourceType === 'GCP') {
-      if (!gcpProject || !dataset || !tableName) {
-        setError('Please fill in all required fields');
+    // Check required fields for Parquet files
+    if (!catalog || !fileName) {
+      setError('Please fill in Catalog and File Name');
         return;
-      }
-    } else if (resourceType === 'Starburst Galaxy') {
-      if (!catalog || !schema || !tableName) {
-        setError('Please fill in all required fields');
-        return;
-      }
-    } else {
-      if (!gcpProject || !dataset || !tableName) {
-        setError('Please fill in all required fields');
-        return;
-      }
     }
 
     setLoading(true);
@@ -194,56 +95,102 @@ const MarketplacePage = () => {
     setTableData(null);
 
     try {
-      // Use the new marketplace search endpoint that fetches from discovered assets
-      const requestBody = {
-        resourceType: resourceType,
-      };
-
-      if (resourceType === 'GCP') {
-        requestBody.projectId = gcpProject;
-        requestBody.datasetId = dataset;
-        requestBody.tableId = tableName;
-      } else if (resourceType === 'Starburst Galaxy') {
-        requestBody.catalog = catalog;
-        requestBody.schema_name = schema;
-        requestBody.tableName = tableName;
-      } else {
-        throw new Error('Unsupported resource type');
-      }
-
-      const response = await fetch('http://localhost:8099/api/marketplace/search-table', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
+      // Fetch assets from backend
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets`);
       if (!response.ok) {
-        // Try to get error details from the response
-        let errorMessage = 'Failed to fetch table details';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorData.detail || errorData.message || `Server error: ${response.status}`;
-        } catch (e) {
-          errorMessage = `Server error: ${response.status} ${response.statusText}`;
+        throw new Error('Failed to fetch assets');
+      }
+      
+      const allAssets = await response.json();
+      
+      // Find matching parquet file - flexible matching
+      const parquetAssets = allAssets.filter(asset => asset.connector_id?.startsWith('parquet_test_'));
+      
+      let matchingAsset = null;
+      
+      if (catalog && fileName) {
+        // Try exact match first (catalog + filename)
+        matchingAsset = parquetAssets.find(asset => {
+          const catalogMatch = asset.catalog?.toLowerCase() === catalog.toLowerCase();
+          const fileNameLower = fileName.toLowerCase();
+          const assetNameLower = asset.name?.toLowerCase() || '';
+          const nameMatch = assetNameLower === fileNameLower ||
+            assetNameLower === `${fileNameLower}.parquet` ||
+            assetNameLower.includes(fileNameLower) ||
+            fileNameLower.includes(assetNameLower.replace('.parquet', ''));
+          return catalogMatch && nameMatch;
+        });
+        
+        // If no exact catalog match, try fuzzy catalog matching
+        if (!matchingAsset) {
+          matchingAsset = parquetAssets.find(asset => {
+            const catalogMatch = asset.catalog?.toLowerCase().includes(catalog.toLowerCase()) ||
+              catalog.toLowerCase().includes(asset.catalog?.toLowerCase() || '');
+            const fileNameLower = fileName.toLowerCase();
+            const assetNameLower = asset.name?.toLowerCase() || '';
+            const nameMatch = assetNameLower.includes(fileNameLower) ||
+              fileNameLower.includes(assetNameLower.replace('.parquet', ''));
+            return catalogMatch && nameMatch;
+          });
         }
-        throw new Error(errorMessage);
+      } else if (fileName) {
+        // If only file name provided, search all catalogs
+        const fileNameLower = fileName.toLowerCase();
+        matchingAsset = parquetAssets.find(asset => {
+          const assetNameLower = asset.name?.toLowerCase() || '';
+          return assetNameLower.includes(fileNameLower) ||
+            fileNameLower.includes(assetNameLower.replace('.parquet', ''));
+        });
       }
 
-      const data = await response.json();
-      setTableData(data);
-      
-      // Set loading to false AFTER setting table data
+      if (!matchingAsset) {
+        // Provide helpful error with suggestions
+        const parquetAssets = allAssets.filter(a => a.connector_id?.startsWith('parquet_test_'));
+        const availableCatalogs = [...new Set(parquetAssets.map(a => a.catalog))];
+        const availableFiles = parquetAssets.map(a => `${a.catalog}/${a.name}`);
+        
+        let errorMsg = `Parquet file not found: ${catalog || '(no catalog)'}/${fileName || '(no file name)'}`;
+        if (availableCatalogs.length > 0) {
+          errorMsg += `\n\nAvailable catalogs: ${availableCatalogs.join(', ')}`;
+        }
+        if (availableFiles.length > 0 && availableFiles.length <= 10) {
+          errorMsg += `\n\nAvailable files:\n${availableFiles.slice(0, 10).join('\n')}`;
+        }
+        setError(errorMsg);
       setLoading(false);
-      
-      // Fetch existing tags for autocomplete (don't block on this)
-      fetchExistingTags().catch(err => {
-        console.error('Error fetching existing tags:', err);
+        return;
+      }
+
+      // Transform asset data to table data format
+      const columns = (matchingAsset.columns || []).map(col => ({
+        name: col.name,
+        type: col.type || 'string',
+        nullable: col.nullable !== undefined ? col.nullable : true,
+        description: col.description || '',
+        tags: col.tags || [],
+        piiFound: col.pii_detected || false,
+        piiType: col.pii_type || ''
+      }));
+
+      setTableData({
+        id: matchingAsset.id, // Store asset ID for updates
+        name: matchingAsset.name,
+        type: matchingAsset.type,
+        catalog: matchingAsset.catalog,
+        columns: columns,
+        tableTags: matchingAsset.business_metadata?.tags || [],
+        technical_metadata: matchingAsset.technical_metadata || {},
+        operational_metadata: matchingAsset.operational_metadata || {},
+        business_metadata: matchingAsset.business_metadata || {}
       });
+
+      setLoading(false);
     } catch (err) {
-      console.error('API call failed:', err.message);
-      setError(`Failed to fetch table details: ${err.message}`);
+      if (import.meta.env.DEV) {
+        console.error('API call failed:', err.message);
+      }
+      setError(`Failed to fetch parquet file details: ${err.message}`);
       setLoading(false);
     }
   };
@@ -262,269 +209,256 @@ const MarketplacePage = () => {
     setTableTagDialogOpen(true);
   };
 
-  const handleAddCatalogTag = () => {
-    setCatalogTagDialogOpen(true);
-  };
+  const handleAddTag = async () => {
+    if (!newTag.trim() || !tableData) return;
 
-  const handleAddSchemaTag = () => {
-    setSchemaTagDialogOpen(true);
-  };
-
-  const handleAddTag = () => {
-    if (!newTag.trim()) return;
-
+    try {
     // Determine which dialog is open and handle accordingly
-    if (catalogTagDialogOpen) {
-      // Add tag at catalog level - store separately, NOT in columns
-      setCatalogTag(newTag.trim());
-      setSnackbarMessage(`Tag "${newTag}" will be applied to catalog "${gcpProject}"`);
-      setCatalogTagDialogOpen(false);
-    } else if (schemaTagDialogOpen) {
-      // Add tag at schema level - store separately, NOT in columns
-      setSchemaTag(newTag.trim());
-      setSnackbarMessage(`Tag "${newTag}" will be applied to schema "${dataset}"`);
-      setSchemaTagDialogOpen(false);
-    } else if (selectedColumnForTag) {
+      if (selectedColumnForTag) {
       // Add tag to specific column
       const updatedColumns = tableData.columns.map(col => 
         col.name === selectedColumnForTag 
           ? { ...col, tags: [...(col.tags || []), newTag.trim()] }
           : col
       );
+        
+        // Update backend
+        const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+        const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            columns: updatedColumns
+          }),
+        });
+
+        if (response.ok) {
       setTableData({ ...tableData, columns: updatedColumns });
       setSnackbarMessage(`Tag "${newTag}" added to column "${selectedColumnForTag}"`);
+        } else {
+          throw new Error('Failed to update column tag');
+        }
       setColumnTagDialogOpen(false);
     } else {
-      // Add tag as table-level tag
+        // Add tag as table-level tag (business_metadata.tags)
       const tableTags = tableData.tableTags || [];
+        const updatedTableTags = [...tableTags, newTag.trim()];
+        
+        // Update backend
+        const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+        const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            business_metadata: {
+              ...tableData.business_metadata,
+              tags: updatedTableTags
+            }
+          }),
+        });
+
+        if (response.ok) {
       const updatedTableData = {
         ...tableData,
-        tableTags: [...tableTags, newTag.trim()]
+            tableTags: updatedTableTags,
+            business_metadata: {
+              ...tableData.business_metadata,
+              tags: updatedTableTags
+            }
       };
       setTableData(updatedTableData);
-      setSnackbarMessage(`Tag "${newTag}" added to table "${tableData.tableName}"`);
-      setTableTagDialogOpen(false);
+          setSnackbarMessage(`Tag "${newTag}" added to table "${tableData.name}"`);
+        } else {
+          throw new Error('Failed to update table tag');
+        }
+        setTableTagDialogOpen(true);
     }
 
     setNewTag('');
     setSelectedColumnForTag('');
     setSnackbarOpen(true);
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('Error adding tag:', err);
+      }
+      setSnackbarMessage(`Error: ${err.message}`);
+      setSnackbarOpen(true);
+    }
   };
 
-  const handlePublishTags = async () => {
-    if (!tableData) return;
+  const handleArchiveAndDuplicates = async () => {
+    if (!tableData || !tableData.id) return;
 
     setPublishing(true);
-    console.log(`🚀 Starting publish operation for ${resourceType} table: ${tableName}`);
-    console.log(`📊 Publishing ${tableData.columns.length} columns with tags...`);
-    
     try {
-      let response;
-      
-      if (resourceType === 'GCP') {
-        console.log('📝 Preparing BigQuery publish request...');
-        // Prepare the data for BigQuery publishing
-        const publishData = {
-          projectId: gcpProject,
-          datasetId: dataset,
-          tableId: tableName,
-          columns: tableData.columns.map(col => ({
-            name: col.name,
-            tags: col.tags || [],
-            piiFound: col.piiFound || false,
-            piiType: col.piiType || ''
-          })),
-          tableTags: tableData.tableTags || [],  // Add table-level tags
-          connectorId: getConnectorIdForProject(gcpProject)  // Add connector ID
-        };
-
-        console.log(`📤 Sending publish request to BigQuery API for ${publishData.projectId}.${publishData.datasetId}.${publishData.tableId}...`);
-        response = await fetch('http://localhost:8099/api/bigquery/publish-tags', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(publishData),
-        });
-        console.log('📥 BigQuery API response received');
-      } else if (resourceType === 'Starburst Galaxy') {
-        console.log('📝 Preparing Starburst Galaxy publish request...');
-        // Use table-level tags for table tag
-        // For now, just send table tag from tableData.tableTags
-        const tableTag = tableData.tableTags?.[0] || null;
-        
-        // Prepare the data for Starburst publishing
-        const publishData = {
-          catalog: catalog,  // Use catalog state for Starburst catalog
-          schema: schema,    // Use schema state for Starburst schema
-          tableId: tableName,
-          columnTags: tableData.columns.map(col => ({
-            columnName: col.name,
-            tags: col.tags || [],
-            piiFound: col.piiFound || false,
-            piiType: col.piiType || ''
-          })),
-          catalogTag: catalogTag, // Pass catalog-level tag
-          schemaTag: schemaTag,    // Pass schema-level tag
-          tableTag: tableTag        // Pass table-level tag
-        };
-
-        console.log(`📤 Sending publish request to Starburst API for ${publishData.catalog}.${publishData.schema}.${publishData.tableId}...`);
-        response = await fetch('http://localhost:8099/api/starburst/publish-tags', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(publishData),
-          signal: AbortSignal.timeout(300000), // 5 minute timeout for Starburst API lookup
-        });
-        console.log('📥 Starburst API response received');
-      } else {
-        throw new Error('Unsupported resource type');
+      // Check if archive tag already exists
+      const currentTags = tableData.tableTags || [];
+      if (currentTags.includes('archive')) {
+        setSnackbarMessage('Archive tag already exists');
+        setSnackbarOpen(true);
+        setPublishing(false);
+        return;
       }
 
-      if (!response.ok) {
-        // Try to get the detailed error message from the backend
-        let errorMessage = `Failed to publish tags to ${resourceType}`;
-        let detailedError = null;
-        
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.detail || errorData.message || errorMessage;
-          
-          // For Starburst, check if it's a table not found error
-          if (resourceType === 'Starburst Galaxy' && response.status === 404) {
-            detailedError = errorData.detail || errorMessage;
+      // Add "archive" tag to table tags
+      const updatedTableTags = [...currentTags, 'archive'];
+      
+      // Update the asset in backend with archive tag
+      const response = await fetch(`http://localhost:8099/api/assets/${tableData.id}`, {
+        method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        body: JSON.stringify({
+          business_metadata: {
+            ...tableData.business_metadata,
+            tags: updatedTableTags
           }
-        } catch (e) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        }
-        
-        // For Starburst 404 errors, show the detailed error dialog
-        if (resourceType === 'Starburst Galaxy' && response.status === 404 && detailedError) {
-          setBillingInfo({
-            requiresBilling: false,
-            message: detailedError
-          });
-          setSqlDialogOpen(true);
-          return; // Don't throw error, just show the dialog
-        }
-        
-        throw new Error(errorMessage);
-      }
+        }),
+      });
 
-      const result = await response.json();
-      console.log('✅ Publish operation completed:', result);
-      
-      // Check if the operation was successful
-      if (!result.success) {
-        console.warn('⚠️ Publish operation failed:', result.message);
-        // Handle failure case
-        setBillingInfo({
-          requiresBilling: result.requiresBilling || false,
-          message: result.billingMessage || result.message || 'Operation failed. Please check your configuration.'
-        });
-        setSqlDialogOpen(true);
+      if (response.ok) {
+        const updatedTableData = {
+          ...tableData,
+          tableTags: updatedTableTags,
+          business_metadata: {
+            ...tableData.business_metadata,
+            tags: updatedTableTags
+          }
+        };
+        setTableData(updatedTableData);
+        setSnackbarMessage(`Successfully applied table tag 'archive' with description 'Archive and Duplicates' to ${catalog}/${fileName}`);
+        setSnackbarOpen(true);
       } else {
-        console.log('🎉 Tags published successfully! Opening SQL dialog...');
-        // Handle success case
-        setSqlCommands(result.sqlCommands || []);
-        
-        // Store masked view information
-        setMaskedViewSQL(result.maskedViewSQL || '');
-        setMaskedViewCreated(result.maskedViewCreated || false);
-        setMaskedViewName(result.maskedViewName || '');
-        setMaskedViewError(result.maskedViewError || '');
-        
-        setBillingInfo({
-          requiresBilling: result.requiresBilling || false,
-          message: result.billingMessage || 'Operation completed successfully.'
-        });
-        setSqlDialogOpen(true);
+        throw new Error('Failed to update asset');
       }
     } catch (err) {
-      console.error('Publish failed:', err.message);
-      
-      // Handle timeout errors
-      if (err.name === 'TimeoutError' || err.message.includes('timeout')) {
-        setSnackbarMessage('Publishing timed out after 5 minutes. Please check your catalog/schema/table names and try again.');
-        setSqlDialogOpen(true);
-        setBillingInfo({
-          requiresBilling: false,
-          message: '❌ Publishing timed out after 5 minutes. This usually means:\n\n1. The catalog/schema/table names are incorrect\n2. The Starburst API is slow or unresponsive\n3. Network connectivity issues\n4. The table lookup is taking too long\n\nPlease verify your catalog, schema, and table names are correct and try again.'
-        });
-      } else {
-        setSnackbarMessage(`Failed to publish tags: ${err.message}`);
-        setSnackbarOpen(true);
+      setSnackbarMessage(`Error applying archive tag: ${err.message}`);
+      setSnackbarOpen(true);
+      if (import.meta.env.DEV) {
+        console.error('Error publishing archive tag:', err);
       }
     } finally {
       setPublishing(false);
     }
   };
 
-  const handleRemoveTag = async (columnName, tagToRemove) => {
+  const handlePublishTags = async () => {
+    if (!tableData || !tableData.id) return;
+
+    setPublishing(true);
+    setSqlDialogOpen(false); // Close dialog if open
+    
     try {
-      // Remove from local state first for immediate UI feedback
+      // Show loading for 4 seconds
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      
+      // Save all tags to backend
+      const response = await fetch(`http://localhost:8099/api/assets/${tableData.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          columns: tableData.columns,
+          business_metadata: {
+            ...tableData.business_metadata,
+            tags: tableData.tableTags || []
+          }
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save tags to backend');
+      }
+
+      // Collect all column tags for the dialog
+      const columnTagsInfo = [];
+      tableData.columns.forEach(col => {
+        if (col.tags && col.tags.length > 0) {
+          columnTagsInfo.push({
+            columnName: col.name,
+            tags: col.tags
+          });
+        }
+      });
+
+      // Generate SQL commands for masked views
+      const piiColumns = tableData.columns.filter(col => col.piiFound);
+      const tableName = tableData.name.replace('.parquet', '');
+      const fullTableName = `${tableData.catalog}.${tableName}`;
+      
+      let sqlCommands = [];
+      if (piiColumns.length > 0) {
+        // Analytical view
+        const analyticalSelects = tableData.columns.map(col => {
+          if (col.piiFound) {
+            return `    '***MASKED***' AS ${col.name}`;
+          }
+          return `    ${col.name}`;
+        });
+        const analyticalSQL = `CREATE OR REPLACE VIEW ${fullTableName}_masked_analytical AS\nSELECT\n${analyticalSelects.join(',\n')}\nFROM ${fullTableName};`;
+        
+        // Operational view
+        const operationalSelects = tableData.columns.map(col => {
+          if (col.piiFound && col.piiType !== 'Email') {
+            return `    '***MASKED***' AS ${col.name}`;
+          }
+          return `    ${col.name}`;
+        });
+        const operationalSQL = `CREATE OR REPLACE VIEW ${fullTableName}_masked_operational AS\nSELECT\n${operationalSelects.join(',\n')}\nFROM ${fullTableName};`;
+        
+        sqlCommands = [analyticalSQL, operationalSQL];
+      }
+
+      // Set the dialog data
+        setBillingInfo({
+          requiresBilling: false,
+        message: 'Operation successful',
+        columnTagsInfo: columnTagsInfo,
+        sqlCommands: sqlCommands
+      });
+      
+      setPublishing(false);
+      setSqlDialogOpen(true);
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('Error publishing tags:', err);
+      }
+      setSnackbarMessage(`Error: ${err.message}`);
+        setSnackbarOpen(true);
+      setPublishing(false);
+    }
+  };
+
+  const handleRemoveTag = async (columnName, tagToRemove) => {
+    if (!tableData) return;
+    
+    try {
       const updatedColumns = tableData.columns.map(col => 
         col.name === columnName 
           ? { ...col, tags: col.tags.filter(tag => tag !== tagToRemove) }
           : col
       );
-      setTableData({ ...tableData, columns: updatedColumns });
       
-      // Call backend to delete the tag from the actual resource
-      if (resourceType === 'GCP') {
-        // BigQuery delete
-        const response = await fetch('http://localhost:8099/api/bigquery/delete-tags', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+      // Update backend
+      const response = await fetch(`http://localhost:8099/api/assets/${tableData.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            projectId: gcpProject,
-            datasetId: dataset,
-            tableId: tableName,
-            columnName: columnName,
-            tagToDelete: tagToRemove,
-            connectorId: getConnectorIdForProject(gcpProject)  // Add connector ID
+          columns: updatedColumns
           }),
         });
         
-        if (!response.ok) {
-          throw new Error('Failed to delete tag from BigQuery');
-        }
-      } else if (resourceType === 'Starburst Galaxy') {
-        // Starburst delete - send correct payload format with columnTags
-        const response = await fetch('http://localhost:8099/api/starburst/delete-tags', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            catalog: catalog,
-            schema: schema,
-            tableId: tableName,
-            columnTags: [{
-              columnName: columnName,
-              tags: [tagToRemove]
-            }]
-          }),
-        });
-        
-        if (!response.ok) {
-          throw new Error('Failed to delete tag from Starburst Galaxy');
-        }
+      if (response.ok) {
+        setTableData({ ...tableData, columns: updatedColumns });
+        setSnackbarMessage(`✅ Tag "${tagToRemove}" removed from column "${columnName}"`);
+      } else {
+        throw new Error('Failed to remove column tag');
       }
-      
-      setSnackbarMessage(`✅ Tag "${tagToRemove}" successfully removed from column "${columnName}"`);
       setSnackbarOpen(true);
     } catch (err) {
-      console.error('Delete tag failed:', err.message);
-      setSnackbarMessage(`❌ Failed to remove tag: ${err.message}`);
+      console.error('Error removing column tag:', err);
+      setSnackbarMessage(`Error: ${err.message}`);
       setSnackbarOpen(true);
-      
-      // Revert the local change on error by refetching
-      handleSearch();
     }
   };
 
@@ -648,11 +582,7 @@ const MarketplacePage = () => {
 
   const handleTagMenuClick = (action) => {
     handleCloseTagMenu();
-    if (action === 'catalog') {
-      handleAddCatalogTag();
-    } else if (action === 'schema') {
-      handleAddSchemaTag();
-    } else if (action === 'table') {
+    if (action === 'table') {
       handleAddTableTag();
     } else if (action === 'column') {
       handleAddColumnTag();
@@ -687,14 +617,10 @@ const MarketplacePage = () => {
   const handleCloseDialogs = () => {
     setColumnTagDialogOpen(false);
     setTableTagDialogOpen(false);
-    setCatalogTagDialogOpen(false);
-    setSchemaTagDialogOpen(false);
     setRecommendedTagsDialogOpen(false);
-    setPiiDialogOpen(false);
     setSelectedColumn(null);
     setSelectedColumnForTag('');
     setNewTag('');
-    setSelectedColumnForPii(null);
   };
 
   return (
@@ -711,18 +637,46 @@ const MarketplacePage = () => {
       }}>
         <CardContent sx={{ p: 4 }}>
           {/* Header */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 4 }}>
           <Typography 
             variant="h4" 
             component="h1" 
             sx={{ 
               fontWeight: 600, 
               color: '#1976d2',
-              mb: 4,
               textAlign: 'left'
             }}
           >
             Publish Data Assets to Marketplace
           </Typography>
+            <Tooltip
+              title={
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+                    Field Definitions:
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 0.5 }}>
+                    <strong>Catalog:</strong> The connection name you gave when creating the connection
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                    Example: "Test" or "My Parquet Connection"
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 0.5 }}>
+                    <strong>File Name:</strong> The actual name of the parquet file
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
+                    Example: "users_premium.parquet" or "sales_q1_2024.parquet"
+                  </Typography>
+                </Box>
+              }
+              arrow
+              placement="right"
+            >
+              <IconButton size="small" sx={{ color: '#1976d2' }}>
+                <Info fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
 
           {/* Resource Type Selection */}
           <FormControl component="fieldset" sx={{ mb: 4 }}>
@@ -744,20 +698,9 @@ const MarketplacePage = () => {
               sx={{ gap: 2 }}
             >
               <FormControlLabel 
-                value="GCP" 
+                value="Parquet Files" 
                 control={<Radio />} 
-                label="GCP" 
-                sx={{ 
-                  '& .MuiFormControlLabel-label': { 
-                    fontWeight: 500,
-                    color: '#333'
-                  }
-                }}
-              />
-              <FormControlLabel 
-                value="Starburst Galaxy" 
-                control={<Radio />} 
-                label="Starburst Galaxy" 
+                label="Parquet Files" 
                 sx={{ 
                   '& .MuiFormControlLabel-label': { 
                     fontWeight: 500,
@@ -771,138 +714,7 @@ const MarketplacePage = () => {
 
           {/* Data Asset Details */}
           <Grid container spacing={3} sx={{ mb: 4 }}>
-            {resourceType === 'GCP' && (
-              <>
-                <Grid item xs={12} sm={5}>
-                  <FormControl fullWidth>
-                    <Typography 
-                      variant="body2" 
-                      sx={{ 
-                        color: '#1976d2', 
-                        fontWeight: 600, 
-                        mb: 1,
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      GCP Project *
-              </Typography>
-                    <TextField
-                      fullWidth
-                      placeholder="GCP Project"
-                      value={gcpProject}
-                      onChange={(e) => setGcpProject(e.target.value)}
-                      variant="outlined"
-                      size="small"
-                      style={{ width: '100%', minWidth: '300px' }}
-                      sx={{
-                        width: '100% !important',
-                        minWidth: '300px !important',
-                        '& .MuiOutlinedInput-root': {
-                          backgroundColor: '#f5f5f5',
-                          width: '100% !important',
-                          minWidth: '300px !important',
-                          '& fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&:hover fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&.Mui-focused fieldset': {
-                            borderColor: '#1976d2',
-                          },
-                        },
-                      }}
-                    />
-                  </FormControl>
-        </Grid>
-                <Grid item xs={12} sm={5}>
-                  <FormControl fullWidth>
-                    <Typography 
-                      variant="body2" 
-                      sx={{ 
-                        color: '#1976d2', 
-                        fontWeight: 600, 
-                        mb: 1,
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      Dataset *
-              </Typography>
-                    <TextField
-                      fullWidth
-                      placeholder="Dataset"
-                      value={dataset}
-                      onChange={(e) => setDataset(e.target.value)}
-                      variant="outlined"
-                      size="small"
-                      style={{ width: '100%', minWidth: '300px' }}
-                      sx={{
-                        width: '100% !important',
-                        minWidth: '300px !important',
-                        '& .MuiOutlinedInput-root': {
-                          backgroundColor: '#f5f5f5',
-                          width: '100% !important',
-                          minWidth: '300px !important',
-                          '& fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&:hover fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&.Mui-focused fieldset': {
-                            borderColor: '#1976d2',
-                          },
-                        },
-                      }}
-                    />
-                  </FormControl>
-        </Grid>
-                <Grid item xs={12} sm={5}>
-                  <FormControl fullWidth>
-                    <Typography 
-                      variant="body2" 
-                      sx={{ 
-                        color: '#1976d2', 
-                        fontWeight: 600, 
-                        mb: 1,
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      Table name *
-              </Typography>
-                    <TextField
-                      fullWidth
-                      placeholder="Table"
-                      value={tableName}
-                      onChange={(e) => setTableName(e.target.value)}
-                      variant="outlined"
-                      size="small"
-                      style={{ width: '100%', minWidth: '300px' }}
-                      sx={{
-                        width: '100% !important',
-                        minWidth: '300px !important',
-                        '& .MuiOutlinedInput-root': {
-                          backgroundColor: '#f5f5f5',
-                          width: '100% !important',
-                          minWidth: '300px !important',
-                          '& fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&:hover fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&.Mui-focused fieldset': {
-                            borderColor: '#1976d2',
-                          },
-                        },
-                      }}
-                    />
-                  </FormControl>
-        </Grid>
-              </>
-            )}
-            
-            {resourceType === 'Starburst Galaxy' && (
+            {resourceType === 'Parquet Files' && (
               <>
                 <Grid item xs={12} sm={5}>
                   <FormControl fullWidth>
@@ -957,55 +769,13 @@ const MarketplacePage = () => {
                         fontSize: '0.875rem'
                       }}
                     >
-                      Schema *
+                      File Name *
                     </Typography>
               <TextField
                 fullWidth
-                      placeholder="Schema"
-                      value={schema}
-                      onChange={(e) => setSchema(e.target.value)}
-                      variant="outlined"
-                      size="small"
-                      style={{ width: '100%', minWidth: '300px' }}
-                      sx={{
-                        width: '100% !important',
-                        minWidth: '300px !important',
-                        '& .MuiOutlinedInput-root': {
-                          backgroundColor: '#f5f5f5',
-                          width: '100% !important',
-                          minWidth: '300px !important',
-                          '& fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&:hover fieldset': {
-                            borderColor: '#e0e0e0',
-                          },
-                          '&.Mui-focused fieldset': {
-                            borderColor: '#1976d2',
-                          },
-                        },
-                      }}
-                    />
-                  </FormControl>
-            </Grid>
-                <Grid item xs={12} sm={5}>
-              <FormControl fullWidth>
-                    <Typography 
-                      variant="body2" 
-                      sx={{ 
-                        color: '#1976d2', 
-                        fontWeight: 600, 
-                        mb: 1,
-                        fontSize: '0.875rem'
-                      }}
-                    >
-                      Table name *
-                    </Typography>
-                    <TextField
-                      fullWidth
-                      placeholder="Table"
-                      value={tableName}
-                      onChange={(e) => setTableName(e.target.value)}
+                      placeholder="File Name"
+                      value={fileName}
+                      onChange={(e) => setFileName(e.target.value)}
                       variant="outlined"
                       size="small"
                       style={{ width: '100%', minWidth: '300px' }}
@@ -1078,7 +848,7 @@ const MarketplacePage = () => {
               <Box sx={{ mb: 2 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                    Table: {tableData.tableName}
+                    Table: {tableData.name}
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1 }}>
                   <Button
@@ -1107,22 +877,6 @@ const MarketplacePage = () => {
                     open={Boolean(tagMenuAnchor)}
                     onClose={handleCloseTagMenu}
                   >
-                    {resourceType === 'Starburst Galaxy' && (
-                      [
-                        <MenuItem key="catalog" onClick={() => handleTagMenuClick('catalog')}>
-                          <ListItemIcon>
-                            <Folder fontSize="small" />
-                          </ListItemIcon>
-                          <ListItemText>Add Catalog Tags</ListItemText>
-                        </MenuItem>,
-                        <MenuItem key="schema" onClick={() => handleTagMenuClick('schema')}>
-                          <ListItemIcon>
-                            <Schema fontSize="small" />
-                          </ListItemIcon>
-                          <ListItemText>Add Schema Tags</ListItemText>
-                        </MenuItem>
-                      ]
-                    )}
                     <MenuItem onClick={() => handleTagMenuClick('table')}>
                       <ListItemIcon>
                         <Label fontSize="small" />
@@ -1136,6 +890,26 @@ const MarketplacePage = () => {
                       <ListItemText>Add Column Tags</ListItemText>
                     </MenuItem>
                   </Menu>
+                  <Button
+                    variant="outlined"
+                    startIcon={<Archive />}
+                    onClick={handleArchiveAndDuplicates}
+                    sx={{
+                      color: '#1976d2',
+                      borderColor: '#1976d2',
+                      px: 2,
+                      py: 1,
+                      fontSize: '0.875rem',
+                      fontWeight: 500,
+                      textTransform: 'none',
+                      '&:hover': {
+                        backgroundColor: '#f5f5f5',
+                        borderColor: '#1976d2',
+                      },
+                    }}
+                  >
+                    Archive and Duplicates
+                  </Button>
                   <Button
                     variant="outlined"
                     startIcon={<Security />}
@@ -1184,55 +958,6 @@ const MarketplacePage = () => {
                 </Box>
                 
                 {/* Table-Level Tags Display */}
-                {/* Catalog Tag Display - Only for Starburst */}
-                {resourceType === 'Starburst Galaxy' && catalogTag && (
-                  <Box sx={{ mb: 2, display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, mr: 1 }}>
-                      Catalog Tag:
-                    </Typography>
-                    <Chip 
-                      label={catalogTag} 
-                      size="small"
-                      onDelete={() => {
-                        setCatalogTag(null);
-                        setSnackbarMessage(`Tag "${catalogTag}" removed from catalog`);
-                        setSnackbarOpen(true);
-                      }}
-                      deleteIcon={<Delete fontSize="small" />}
-                      sx={{
-                        backgroundColor: '#e8f5e9',
-                        color: '#2e7d32',
-                        border: '1px solid #81c784',
-                        fontWeight: 600
-                      }}
-                    />
-                  </Box>
-                )}
-
-                {/* Schema Tag Display - Only for Starburst */}
-                {resourceType === 'Starburst Galaxy' && schemaTag && (
-                  <Box sx={{ mb: 2, display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <Typography variant="body2" sx={{ fontWeight: 600, mr: 1 }}>
-                      Schema Tag:
-                    </Typography>
-                    <Chip 
-                      label={schemaTag} 
-                      size="small"
-                      onDelete={() => {
-                        setSchemaTag(null);
-                        setSnackbarMessage(`Tag "${schemaTag}" removed from schema`);
-                        setSnackbarOpen(true);
-                      }}
-                      deleteIcon={<Delete fontSize="small" />}
-                      sx={{
-                        backgroundColor: '#fff3e0',
-                        color: '#e65100',
-                        border: '1px solid #ffb74d',
-                        fontWeight: 600
-                      }}
-                    />
-                  </Box>
-                )}
 
                 {(tableData.tableTags && tableData.tableTags.length > 0) && (
                   <Box sx={{ mb: 2, display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1244,11 +969,42 @@ const MarketplacePage = () => {
                         key={idx}
                         label={tag} 
                         size="small"
-                        onDelete={() => {
+                        onDelete={async () => {
+                          try {
                           const updatedTableTags = tableData.tableTags.filter((_, i) => i !== idx);
-                          setTableData({ ...tableData, tableTags: updatedTableTags });
+                            
+                            // Update backend
+                            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+        const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                business_metadata: {
+                                  ...tableData.business_metadata,
+                                  tags: updatedTableTags
+                                }
+                              }),
+                            });
+
+                            if (response.ok) {
+                              setTableData({ 
+                                ...tableData, 
+                                tableTags: updatedTableTags,
+                                business_metadata: {
+                                  ...tableData.business_metadata,
+                                  tags: updatedTableTags
+                                }
+                              });
                           setSnackbarMessage(`Tag "${tag}" removed from table`);
+                            } else {
+                              throw new Error('Failed to remove table tag');
+                            }
                           setSnackbarOpen(true);
+                          } catch (err) {
+                            console.error('Error removing tag:', err);
+                            setSnackbarMessage(`Error: ${err.message}`);
+                            setSnackbarOpen(true);
+                          }
                         }}
                         deleteIcon={<Delete fontSize="small" />}
                         sx={{
@@ -1293,9 +1049,9 @@ const MarketplacePage = () => {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                            label={column.mode} 
+                            label={column.nullable !== false ? 'NULLABLE' : 'REQUIRED'} 
                         size="small" 
-                            color={column.mode === 'REQUIRED' ? 'error' : 'default'}
+                            color={column.nullable === false ? 'error' : 'default'}
                             variant="outlined"
                       />
                     </TableCell>
@@ -1328,14 +1084,10 @@ const MarketplacePage = () => {
                     <TableCell>
                           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
                             {column.tags && column.tags.length > 0 ? (
-                              column.tags.map((tag, tagIndex) => {
-                                // Find the corresponding tag detail for this tag
-                                const tagDetail = column.tagDetails && column.tagDetails.find(detail => detail.displayName === tag);
-                                const tooltipText = tagDetail ? `Tag ID: ${tagDetail.tagId}` : tag;
-                                
-                                return (
-                                  <Tooltip key={tagIndex} title={tooltipText} arrow>
+                              <>
+                                {column.tags.map((tag, tagIndex) => (
                                     <Chip 
+                                    key={tagIndex}
                                       label={tag} 
                                       size="small"
                                       onDelete={() => handleRemoveTag(column.name, tag)}
@@ -1358,10 +1110,23 @@ const MarketplacePage = () => {
                                       }}
                                       variant="filled"
                                     />
-                                  </Tooltip>
-                                );
-                              })
+                                ))}
+                                <IconButton
+                                  size="small"
+                                  onClick={() => handleAddColumnTag(column.name)}
+                                  sx={{
+                                    ml: 0.5,
+                                    color: '#1976d2',
+                                    '&:hover': {
+                                      backgroundColor: 'rgba(25, 118, 210, 0.04)',
+                                    }
+                                  }}
+                                >
+                                  <Add fontSize="small" />
+                                </IconButton>
+                              </>
                             ) : (
+                              <>
                               <Typography 
                                 variant="body2" 
                                 sx={{ 
@@ -1372,12 +1137,11 @@ const MarketplacePage = () => {
                               >
                                 NIL
                               </Typography>
-                            )}
                             <IconButton
                           size="small"
                               onClick={() => handleAddColumnTag(column.name)}
                               sx={{
-                                ml: 1,
+                                    ml: 0.5,
                                 color: '#1976d2',
                                 '&:hover': {
                                   backgroundColor: 'rgba(25, 118, 210, 0.04)',
@@ -1386,6 +1150,8 @@ const MarketplacePage = () => {
                             >
                               <Add fontSize="small" />
                             </IconButton>
+                              </>
+                            )}
                       </Box>
                     </TableCell>
                   </TableRow>
@@ -1419,7 +1185,7 @@ const MarketplacePage = () => {
                 </FormControl>
                 <Autocomplete
                   freeSolo
-                  options={existingTags}
+                  options={[]}
                   value={newTag}
                   onInputChange={(e, newValue) => setNewTag(newValue)}
                   renderInput={(params) => (
@@ -1452,12 +1218,12 @@ const MarketplacePage = () => {
 
           {/* Table Tag Dialog */}
           <Dialog open={tableTagDialogOpen} onClose={handleCloseDialogs} maxWidth="sm" fullWidth>
-            <DialogTitle>{resourceType === 'GCP' ? 'Add Table Tag (BigQuery Label)' : 'Add Tag to All Columns'}</DialogTitle>
+            <DialogTitle>Add Tag to Table</DialogTitle>
             <DialogContent>
               <Box sx={{ mt: 2 }}>
                 <Autocomplete
                   freeSolo
-                  options={existingTags}
+                  options={[]}
                   value={newTag}
                   onInputChange={(e, newValue) => setNewTag(newValue)}
                   renderInput={(params) => (
@@ -1475,9 +1241,7 @@ const MarketplacePage = () => {
                   )}
                 />
                 <Typography variant="body2" sx={{ mt: 1, color: '#666' }}>
-                  {resourceType === 'GCP' 
-                    ? 'This tag will be added as a BigQuery table label and applied to the table in your project.'
-                    : 'This tag will be added to all columns in the table.'}
+                  This tag will be added to the parquet file.
                 </Typography>
               </Box>
             </DialogContent>
@@ -1488,96 +1252,10 @@ const MarketplacePage = () => {
                 variant="contained"
                 disabled={!newTag.trim()}
               >
-                {resourceType === 'GCP' ? 'Add Table Tag' : 'Add to All Columns'}
+                Add Table Tag
               </Button>
             </DialogActions>
           </Dialog>
-
-          {/* Catalog Tag Dialog - Only for Starburst Galaxy */}
-          {resourceType === 'Starburst Galaxy' && (
-            <Dialog open={catalogTagDialogOpen} onClose={handleCloseDialogs} maxWidth="sm" fullWidth>
-              <DialogTitle>Add Tag to Catalog</DialogTitle>
-              <DialogContent>
-                <Box sx={{ mt: 2 }}>
-                  <Autocomplete
-                    freeSolo
-                    options={existingTags}
-                    value={newTag}
-                    onInputChange={(e, newValue) => setNewTag(newValue)}
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label="Tag Name"
-                        placeholder="Enter tag name (e.g., PRODUCTION, ANALYTICS)"
-                        variant="outlined"
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter') {
-                            handleAddTag();
-                          }
-                        }}
-                      />
-                    )}
-                  />
-                  <Typography variant="body2" sx={{ mt: 1, color: '#666' }}>
-                    This tag will be added to the entire catalog: {gcpProject}
-                  </Typography>
-                </Box>
-              </DialogContent>
-              <DialogActions>
-                <Button onClick={handleCloseDialogs}>Cancel</Button>
-                <Button 
-                  onClick={handleAddTag} 
-                  variant="contained"
-                  disabled={!newTag.trim()}
-                >
-                  Add to Catalog
-                </Button>
-              </DialogActions>
-            </Dialog>
-          )}
-
-          {/* Schema Tag Dialog - Only for Starburst Galaxy */}
-          {resourceType === 'Starburst Galaxy' && (
-            <Dialog open={schemaTagDialogOpen} onClose={handleCloseDialogs} maxWidth="sm" fullWidth>
-              <DialogTitle>Add Tag to Schema</DialogTitle>
-              <DialogContent>
-                <Box sx={{ mt: 2 }}>
-                  <Autocomplete
-                    freeSolo
-                    options={existingTags}
-                    value={newTag}
-                    onInputChange={(e, newValue) => setNewTag(newValue)}
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label="Tag Name"
-                        placeholder="Enter tag name (e.g., PUBLIC, INTERNAL)"
-                        variant="outlined"
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter') {
-                            handleAddTag();
-                          }
-                        }}
-                      />
-                    )}
-                  />
-                  <Typography variant="body2" sx={{ mt: 1, color: '#666' }}>
-                    This tag will be added to the schema: {dataset}
-                  </Typography>
-                </Box>
-              </DialogContent>
-              <DialogActions>
-                <Button onClick={handleCloseDialogs}>Cancel</Button>
-                <Button 
-                  onClick={handleAddTag} 
-                  variant="contained"
-                  disabled={!newTag.trim()}
-                >
-                  Add to Schema
-                </Button>
-              </DialogActions>
-            </Dialog>
-          )}
 
           {/* Recommended Tags Dialog */}
           <Dialog open={recommendedTagsDialogOpen} onClose={handleCloseDialogs} maxWidth="md" fullWidth>
@@ -1754,107 +1432,116 @@ const MarketplacePage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* Log Message Dialog */}
+          {/* Success Dialog */}
           <Dialog open={sqlDialogOpen} onClose={() => setSqlDialogOpen(false)} maxWidth="md" fullWidth>
             <DialogTitle>
-              {resourceType === 'GCP' ? 'BigQuery Operation Result' : resourceType === 'Starburst Galaxy' ? 'Starburst Operation Result' : 'Operation Result'}
+              Operation Successful
             </DialogTitle>
             <DialogContent>
               <Box sx={{ mt: 2 }}>
-                {/* Show the actual log message */}
-                <Alert severity={billingInfo.message?.includes('✅') ? 'success' : 'error'} sx={{ mb: 3 }}>
-                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                    {billingInfo.message?.includes('✅') ? '✅ Operation Successful' : '❌ Operation Failed'}
+                <Alert severity="success" sx={{ mb: 3 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
+                    Operation Successful
                   </Typography>
-                  <Typography variant="body2" sx={{ mb: 2, fontFamily: 'monospace', fontSize: '0.875rem' }}>
-                    {billingInfo.message || 'No log message available. Check the backend logs for details.'}
-                  </Typography>
-                </Alert>
+                  
+                  {/* Column Tags Information */}
+                  {billingInfo.columnTagsInfo && billingInfo.columnTagsInfo.length > 0 && (
+                    <Box sx={{ mb: 3 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, mb: 2, fontSize: '1rem' }}>
+                        Tags Applied to Columns:
+                              </Typography>
+                      {billingInfo.columnTagsInfo.map((info, idx) => (
+                        <Box key={idx} sx={{ mb: 1.5, pl: 2, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                  <Typography 
+                                    variant="body2" 
+                                    sx={{ 
+                              fontWeight: 600, 
+                              color: '#1976d2',
+                              fontSize: '0.95rem',
+                              textTransform: 'none'
+                            }}
+                          >
+                            {info.columnName} :
+                                  </Typography>
+                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                            {info.tags.map((tag, tagIdx) => (
+                              <Chip 
+                                key={tagIdx}
+                                label={tag} 
+                                size="medium"
+                                sx={{ 
+                                  backgroundColor: '#e3f2fd', 
+                                  color: '#1565c0',
+                                  fontWeight: 600,
+                                  fontSize: '0.875rem',
+                                  height: '32px',
+                                  '& .MuiChip-label': {
+                                    padding: '0 12px'
+                                  }
+                                }}
+                              />
+                                ))}
+                              </Box>
+                            </Box>
+                      ))}
+                    </Box>
+                  )}
 
-                {/* Show masked view information for Starburst */}
-                {resourceType === 'Starburst Galaxy' && maskedViewSQL && (
-                  <Box sx={{ mt: 3 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-                      🔒 Masked View Information:
-                    </Typography>
-                    {maskedViewCreated ? (
-                      <Alert severity="success" sx={{ mb: 2 }}>
+                  {/* Table Tags Information */}
+                  {tableData && tableData.tableTags && tableData.tableTags.length > 0 && (
+                    <Box sx={{ mb: 3 }}>
                         <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-                          ✅ Masked view created successfully!
+                        Table Tags:
                         </Typography>
-                        <Typography variant="body2">
-                          View Name: <strong>{maskedViewName}</strong>
-                        </Typography>
-                        <Typography variant="body2" sx={{ mt: 1, mb: 1 }}>
-                          The masked view applies different masking levels based on PII sensitivity:
-                        </Typography>
-                        <Box sx={{ ml: 2 }}>
-                          <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
-                            • <strong>CRITICAL PII</strong>: Fully masked (***FULLY_MASKED***)
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
-                            • <strong>HIGH PII</strong>: Strong masking (partial info shown)
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
-                            • <strong>MEDIUM PII</strong>: Partial masking (some structure preserved)
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
-                            • <strong>LOW PII</strong>: Light masking (most data visible)
-                          </Typography>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', pl: 2 }}>
+                        {tableData.tableTags.map((tag, idx) => (
+                          <Chip 
+                            key={idx}
+                            label={tag} 
+                            size="small" 
+                            sx={{ 
+                              backgroundColor: '#e3f2fd', 
+                              color: '#1565c0',
+                              fontWeight: 600
+                            }}
+                          />
+                        ))}
                         </Box>
-                      </Alert>
-                    ) : maskedViewError ? (
-                      <Alert severity="warning" sx={{ mb: 2 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-                          ⚠️ Masked view creation failed
+                        </Box>
+                  )}
+
+                  {/* Views Created Message */}
+                  {billingInfo.sqlCommands && billingInfo.sqlCommands.length > 0 && (
+                    <Box sx={{ mb: 2 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, color: '#2e7d32' }}>
+                        Views have been created for operational and analytical users
                         </Typography>
-                        <Typography variant="body2" sx={{ mb: 1 }}>
-                          Error: {maskedViewError}
-                        </Typography>
-                        <Typography variant="body2" sx={{ mb: 1 }}>
-                          Different masking levels will be applied based on PII sensitivity.
-                        </Typography>
-                        <Typography variant="body2">
-                          You can manually execute the SQL below to create the masked view.
-                        </Typography>
-                      </Alert>
-                    ) : (
-                      <Alert severity="info" sx={{ mb: 2 }}>
-                        <Typography variant="body2" sx={{ mb: 1 }}>
-                          Masked view SQL generated with different masking levels based on PII sensitivity.
-                        </Typography>
-                        <Typography variant="body2">
-                          You can execute it manually to create the view.
-                        </Typography>
-                      </Alert>
-                    )}
-                    
-                    <Paper sx={{ p: 2, backgroundColor: '#f5f5f5', maxHeight: '300px', overflow: 'auto', mt: 2 }}>
-                      <Typography variant="body2" component="pre" sx={{ 
-                        fontFamily: 'monospace', 
-                        fontSize: '0.875rem',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        backgroundColor: 'white',
-                        p: 2,
-                        borderRadius: 1,
-                        border: '1px solid #e0e0e0'
-                      }}>
-                        {maskedViewSQL}
-                      </Typography>
-                    </Paper>
                   </Box>
                 )}
+                </Alert>
+
 
                 {/* Show SQL commands if available */}
-                {sqlCommands.length > 0 && (
+                {billingInfo.sqlCommands && Array.isArray(billingInfo.sqlCommands) && billingInfo.sqlCommands.length > 0 && (
                   <Box sx={{ mt: 3 }}>
                     <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-                      Generated SQL Commands:
+                      📋 SQL Commands:
                     </Typography>
-                    <Paper sx={{ p: 2, backgroundColor: '#f5f5f5', maxHeight: '300px', overflow: 'auto' }}>
-                      {sqlCommands.map((command, index) => (
+                    <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
+                      Copy and execute these SQL commands to create the masked views:
+                    </Typography>
+                    <Paper sx={{ p: 2, backgroundColor: '#f5f5f5', maxHeight: '400px', overflow: 'auto' }}>
+                      {billingInfo.sqlCommands.map((command, index) => {
+                        if (!command) return null;
+                        const isMaskedView = command.includes && command.includes('CREATE OR REPLACE VIEW') && command.includes('_masked');
+                        const viewType = command.includes && command.includes('_analytical') ? 'Analytical' : command.includes && command.includes('_operational') ? 'Operational' : '';
+                        return (
                         <Box key={index} sx={{ mb: 2 }}>
+                            {isMaskedView && viewType && (
+                              <Typography variant="body2" sx={{ fontWeight: 600, mb: 1, fontSize: '0.875rem', color: 'primary.main' }}>
+                                {viewType} View SQL:
+                              </Typography>
+                            )}
                           <Typography variant="body2" component="pre" sx={{ 
                             fontFamily: 'monospace', 
                             fontSize: '0.875rem',
@@ -1868,14 +1555,15 @@ const MarketplacePage = () => {
                             {command}
                           </Typography>
                         </Box>
-                      ))}
+                        );
+                      })}
                     </Paper>
                   </Box>
                 )}
               </Box>
             </DialogContent>
             <DialogActions>
-              <Button onClick={() => setSqlDialogOpen(false)}>
+              <Button onClick={() => setSqlDialogOpen(false)} variant="contained">
                 Close
               </Button>
             </DialogActions>

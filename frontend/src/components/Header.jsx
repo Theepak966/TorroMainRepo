@@ -9,11 +9,10 @@ import {
 } from '@mui/material';
 import {
   CheckCircle,
-  Refresh,
   Menu,
 } from '@mui/icons-material';
 
-const Header = ({ onRefresh, onMenuClick }) => {
+const Header = ({ onMenuClick }) => {
   return (
       <AppBar 
         position="static" 
@@ -94,18 +93,6 @@ const Header = ({ onRefresh, onMenuClick }) => {
               }
             }}
           />
-          <IconButton 
-            onClick={onRefresh} 
-            size="small"
-            sx={{ 
-              color: 'white',
-              '&:hover': {
-                backgroundColor: 'rgba(255, 255, 255, 0.1)'
-              }
-            }}
-          >
-            <Refresh />
-          </IconButton>
         </Box>
       </Toolbar>
     </AppBar>

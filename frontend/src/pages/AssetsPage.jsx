@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -32,10 +31,6 @@ import {
   CircularProgress,
   Pagination,
   Stack,
-  IconButton,
-  Badge,
-  Tooltip,
-  Snackbar,
 } from '@mui/material';
 import {
   Search,
@@ -43,15 +38,10 @@ import {
   DataObject,
   FilterList,
   Visibility,
-  Download,
   Warning,
   CheckCircle,
   Close,
-  Notifications,
-  AddCircle,
-  Delete,
 } from '@mui/icons-material';
-import AssetsChatbot from '../components/AssetsChatbot';
 
 const AssetsPage = () => {
   const [assets, setAssets] = useState([]);
@@ -74,233 +64,51 @@ const AssetsPage = () => {
   const [totalAssets, setTotalAssets] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [allAssets, setAllAssets] = useState([]); // For filters
-  const [bigqueryTotal, setBigqueryTotal] = useState(0);
-  const [starburstTotal, setStarburstTotal] = useState(0);
-  const [s3Total, setS3Total] = useState(0);
-  
-  // Pending assets state
-  const [pendingAssets, setPendingAssets] = useState([]);
-  const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
-  const [noNotificationsSnackbar, setNoNotificationsSnackbar] = useState(false);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const socketRef = useRef(null);
-
-  // Socket.IO connection for real-time notifications
-  useEffect(() => {
-    let socket = null;
-    
-    try {
-      // Only initialize Socket.IO if not already connected
-      if (!socketRef.current || socketRef.current.disconnected) {
-        console.log('🔧 Initializing Socket.IO connection to /assets namespace...');
-        socketRef.current = io('http://localhost:8099/assets', {
-          // Start with polling only to avoid WebSocket frame header issues
-          transports: ['polling'],  // Use polling only - more reliable
-          reconnection: true,  // Enable auto-reconnect
-          reconnectionDelay: 1000,
-          reconnectionDelayMax: 5000,
-          reconnectionAttempts: 5,
-          timeout: 20000,
-          autoConnect: true,
-          forceNew: false,  // Don't force new connection
-          upgrade: false,  // Disable automatic upgrade to websocket to avoid frame header errors
-          rememberUpgrade: false,
-          withCredentials: false
-        });
-        socket = socketRef.current;
-      } else {
-        console.log('✅ Socket already connected, reusing existing connection');
-        socket = socketRef.current;
-      }
-
-      // Socket.IO connection event listeners
-      socket.on('connect', () => {
-        console.log('✅ Socket.IO Connected to /assets namespace! ID:', socket.id);
-      });
-
-      socket.on('disconnect', (reason) => {
-        console.log('❌ Socket.IO Disconnected from /assets namespace. Reason:', reason);
-      });
-
-      socket.on('connect_error', (error) => {
-        // Don't spam console with connection errors - they're expected during initial connection attempts
-        // Socket.io will automatically retry, and we have polling as fallback
-        if (error.message && !error.message.includes('xhr poll error') && !error.message.includes('timeout')) {
-          console.warn('⚠️ Socket.IO Connection Error (will retry):', error.message);
-        }
-      });
-
-      // Listen for pending asset notifications
-      socket.on('pending_asset_created', (data) => {
-        console.log('📢 Received pending asset notification:', data);
-        // Refresh pending assets immediately
-        fetchPendingAssets();
-      });
-    } catch (error) {
-      console.error('❌ Error setting up Socket.IO connection:', error);
-    }
-
-    return () => {
-      if (socketRef.current) {
-        try {
-          socketRef.current.off('connect');
-          socketRef.current.off('disconnect');
-          socketRef.current.off('connect_error');
-          socketRef.current.off('pending_asset_created');
-          socketRef.current.disconnect();
-        } catch (e) {
-          // Ignore cleanup errors
-        }
-        socketRef.current = null;
-      }
-    };
-  }, []); // Empty deps - socket connection should only be set up once
 
   useEffect(() => {
     fetchAssets();
-    fetchPendingAssets();
-    // Poll for pending assets every 30 seconds (reduced frequency since we have socket.io)
-    const pendingInterval = setInterval(fetchPendingAssets, 30000);
-    return () => clearInterval(pendingInterval);
   }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter]);
 
-  // Also fetch totals when page changes (to ensure counts are accurate)
-  useEffect(() => {
-    if (!searchTerm && !typeFilter && !catalogFilter) {
-      fetchTotals();
-    }
-  }, [currentPage]);
-
-  // Fetch totals separately (only when no filters are applied)
-  useEffect(() => {
-    if (!searchTerm && !typeFilter && !catalogFilter) {
-      fetchTotals();
-    }
-  }, [searchTerm, typeFilter, catalogFilter]);
-
-  const fetchTotals = async () => {
-    try {
-      // Backend limits size to 100; page through results to compute totals safely
-      let page = 0;
-      const size = 100;
-      let fetchedAll = false;
-      let bigqueryCount = 0;
-      let starburstCount = 0;
-      let s3Count = 0;
-      const aggregatedAssets = [];
-      let totalFromAPI = 0;
-
-      while (!fetchedAll) {
-        const resp = await fetch(`http://localhost:8099/api/assets?page=${page}&size=${size}`);
-        if (!resp.ok) {
-          // Stop early on HTTP errors
-          throw new Error(`HTTP ${resp.status}`);
-        }
-        const data = await resp.json();
-        const assetsPage = Array.isArray(data.assets) ? data.assets : [];
-        
-        // Get total from first page's pagination
-        if (page === 0 && data?.pagination?.total) {
-          totalFromAPI = data.pagination.total;
-          setTotalAssets(totalFromAPI); // Update total assets count immediately
-        }
-
-        // Accumulate counts and assets for filters
-        for (const asset of assetsPage) {
-          const id = asset?.connector_id || '';
-          if (id.startsWith('bq_')) bigqueryCount += 1;
-          else if (id.startsWith('starburst_')) starburstCount += 1;
-          else if (id.startsWith('s3_')) s3Count += 1;
-        }
-        aggregatedAssets.push(...assetsPage);
-
-        // Determine if there are more pages
-        const hasNext = Boolean(data?.pagination?.has_next);
-        if (hasNext) {
-          page += 1;
-        } else {
-          fetchedAll = true;
-        }
-        
-        // Safety check: if we've fetched more than the API says exists, stop
-        if (totalFromAPI > 0 && aggregatedAssets.length >= totalFromAPI) {
-          fetchedAll = true;
-        }
-      }
-
-      // Use API total if available, otherwise use counted total
-      const finalTotal = totalFromAPI || aggregatedAssets.length;
-      console.log('✅ Totals fetched:', { 
-        bigqueryCount, 
-        starburstCount, 
-        s3Count, 
-        totalAssets: finalTotal,
-        assetsFetched: aggregatedAssets.length,
-        apiTotal: totalFromAPI
-      });
-      // Update all card counts
-      setTotalAssets(finalTotal); // Ensure totalAssets is updated
-      setBigqueryTotal(bigqueryCount);
-      setStarburstTotal(starburstCount);
-      setS3Total(s3Count);
-      setAllAssets(aggregatedAssets); // For filter dropdowns
-    } catch (error) {
-      console.error('Error fetching totals:', error);
-      // Fallback to zeros to avoid UI crashes
-      setBigqueryTotal(0);
-      setStarburstTotal(0);
-      setS3Total(0);
-      setAllAssets([]);
-    }
-  };
-
   const fetchAssets = async (pageOverride = null) => {
-    try {
       setLoading(true);
-      
-      // Use pageOverride if provided, otherwise use currentPage state
-      const pageToUse = pageOverride !== null ? pageOverride : currentPage;
-      
-      // Build query parameters
-      const params = new URLSearchParams({
-        page: pageToUse.toString(),
-        size: pageSize.toString(),
-      });
-      
-      if (searchTerm) params.append('search', searchTerm);
-      if (catalogFilter) params.append('catalog', catalogFilter);
-      if (typeFilter) params.append('asset_type', typeFilter);
-      
-      const response = await fetch(`http://localhost:8099/api/assets?${params}`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+    try {
+      const response = await fetch('http://localhost:8099/api/assets');
+      if (response.ok) {
       const data = await response.json();
-      const assetsList = Array.isArray(data.assets) ? data.assets : [];
-      const pagination = data?.pagination || { total: 0, total_pages: 0 };
-      
-      // Sort assets by sort_order (if available) or discovered_at (newest first) to ensure newly added appear at top
-      assetsList.sort((a, b) => {
-        // Prefer sort_order if available (higher = newer = top)
-        const sortOrderA = a.sort_order !== null && a.sort_order !== undefined ? a.sort_order : -1;
-        const sortOrderB = b.sort_order !== null && b.sort_order !== undefined ? b.sort_order : -1;
+        setAllAssets(data);
+        setTotalAssets(data.length);
         
-        if (sortOrderA !== -1 || sortOrderB !== -1) {
-          // At least one has sort_order, use it for sorting
-          return sortOrderB - sortOrderA; // Descending order (higher sort_order first)
+        // Apply filters if any
+        let filtered = data;
+        if (searchTerm) {
+          filtered = filtered.filter(asset => 
+            asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (asset.catalog && asset.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
+          );
+        }
+        if (typeFilter) {
+          filtered = filtered.filter(asset => asset.type === typeFilter);
+        }
+        if (catalogFilter) {
+          filtered = filtered.filter(asset => asset.catalog === catalogFilter);
         }
         
-        // Fallback to discovered_at if no sort_order
-        const dateA = a.discovered_at ? new Date(a.discovered_at) : new Date(0);
-        const dateB = b.discovered_at ? new Date(b.discovered_at) : new Date(0);
-        return dateB.getTime() - dateA.getTime(); // Descending order (newest first)
-      });
-      
-      setAssets(assetsList);
-      setTotalAssets(pagination.total || assetsList.length);
-      setTotalPages(pagination.total_pages || 0);
+        // Pagination
+        const page = pageOverride !== null ? pageOverride : currentPage;
+        const start = page * pageSize;
+        const end = start + pageSize;
+        setAssets(filtered.slice(start, end));
+        setTotalPages(Math.ceil(filtered.length / pageSize));
+        } else {
+        setAssets([]);
+        setTotalAssets(0);
+        setTotalPages(0);
+      }
     } catch (error) {
       console.error('Error fetching assets:', error);
+      setAssets([]);
+      setTotalAssets(0);
+      setTotalPages(0);
     } finally {
       setLoading(false);
     }
@@ -309,65 +117,63 @@ const AssetsPage = () => {
   // Get unique types and catalogs for filter dropdowns
   const uniqueTypes = [...new Set(allAssets.map(asset => asset.type))];
   const uniqueCatalogs = [...new Set(allAssets.map(asset => asset.catalog))];
-  
-  // Count assets from BigQuery data source (use stored totals)
-  const bigqueryAssets = bigqueryTotal;
-  
-  // Count assets from Starburst Galaxy data source (use stored totals)
-  const starburstAssets = starburstTotal;
-  
-  // Count assets from Amazon S3 data source (use stored totals)
-  const s3Assets = s3Total;
 
   const getDataSource = (connectorId) => {
     if (!connectorId) return 'Unknown';
-    if (connectorId.startsWith('bq_')) return 'BigQuery';
-    if (connectorId.startsWith('starburst_')) return 'Starburst Galaxy';
-    if (connectorId.startsWith('s3_')) return 'Amazon S3';
-    if (connectorId.startsWith('gcs_')) return 'Google Cloud Storage';
-    if (connectorId.startsWith('azure_blob_')) return 'Azure Blob Storage';
-    if (connectorId.startsWith('azure_files_')) return 'Azure Files';
-    if (connectorId.startsWith('azure_tables_queues_')) return 'Azure Tables & Queues';
-    if (connectorId.startsWith('azure_data_storage_')) return 'Azure Data Storage';
+    if (connectorId.startsWith('parquet_test_')) return 'Parquet Files';
     return 'Unknown';
   };
 
   const getDataSourceColor = (connectorId) => {
-    if (!connectorId) return 'default';
-    if (connectorId.startsWith('bq_')) return 'success';
-    if (connectorId.startsWith('starburst_')) return 'info';
-    if (connectorId.startsWith('s3_')) return 'warning';
-    if (connectorId.startsWith('gcs_')) return 'primary';
-    if (connectorId.startsWith('azure_blob_')) return 'secondary';
-    if (connectorId.startsWith('azure_files_')) return 'secondary';
-    if (connectorId.startsWith('azure_tables_queues_')) return 'secondary';
-    if (connectorId.startsWith('azure_data_storage_')) return 'secondary';
+    if (connectorId && connectorId.startsWith('parquet_test_')) return 'primary';
     return 'default';
   };
 
   const handleViewAsset = async (assetId) => {
+    // Fetch latest asset data from backend to ensure we have the most up-to-date tags
     try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets`);
+      if (response.ok) {
+        const allAssetsData = await response.json();
+        const asset = allAssetsData.find(a => a.id === assetId);
+        if (asset) {
+          // Update the allAssets state with latest data
+          setAllAssets(allAssetsData);
+          setSelectedAsset(asset);
       setDetailsDialogOpen(true);
-      setSelectedAsset(null); // Clear previous data
-      const response = await fetch(`http://localhost:8099/api/assets/${encodeURIComponent(assetId)}`);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+          setOriginalClassification(asset.business_metadata?.classification || 'internal');
+          setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+          setClassification(asset.business_metadata?.classification || 'internal');
+          setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+        }
+      } else {
+        // Fallback to cached data if fetch fails
+        const asset = allAssets.find(a => a.id === assetId);
+        if (asset) {
+          setSelectedAsset(asset);
+          setDetailsDialogOpen(true);
+          setOriginalClassification(asset.business_metadata?.classification || 'internal');
+          setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+          setClassification(asset.business_metadata?.classification || 'internal');
+          setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+        }
       }
-      const data = await response.json();
-      setSelectedAsset(data);
-      // Initialize classification and sensitivity level from asset metadata
-      const businessMetadata = data?.business_metadata || {};
-      const initialClassification = businessMetadata.classification || 'internal';
-      const initialSensitivityLevel = businessMetadata.sensitivity_level || 'medium';
-      setClassification(initialClassification);
-      setSensitivityLevel(initialSensitivityLevel);
-      setOriginalClassification(initialClassification);
-      setOriginalSensitivityLevel(initialSensitivityLevel);
-      setActiveTab(0);
     } catch (error) {
-      console.error('Error fetching asset details:', error);
-      alert('Failed to load asset details. Please try again.');
-      setDetailsDialogOpen(false);
+      // Log error in development only
+      if (import.meta.env.DEV) {
+        console.error('Error fetching asset:', error);
+      }
+      // Fallback to cached data if fetch fails
+      const asset = allAssets.find(a => a.id === assetId);
+      if (asset) {
+        setSelectedAsset(asset);
+        setDetailsDialogOpen(true);
+        setOriginalClassification(asset.business_metadata?.classification || 'internal');
+        setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+        setClassification(asset.business_metadata?.classification || 'internal');
+        setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+      }
     }
   };
 
@@ -383,40 +189,39 @@ const AssetsPage = () => {
 
   const handleSaveMetadata = async () => {
     if (!selectedAsset) return;
-    
     setSavingMetadata(true);
     try {
-      const response = await fetch(`http://localhost:8099/api/assets/${encodeURIComponent(selectedAsset.id)}`, {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          business_metadata: {
+            ...selectedAsset.business_metadata,
           classification: classification,
           sensitivity_level: sensitivityLevel,
+          }
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      // Update the selected asset with new data
-      setSelectedAsset(data.asset);
-      
-      // Update original values to match new saved values
-      const businessMetadata = data.asset?.business_metadata || {};
-      setOriginalClassification(businessMetadata.classification || 'internal');
-      setOriginalSensitivityLevel(businessMetadata.sensitivity_level || 'medium');
-      
-      // Refresh assets list
-      fetchAssets();
-      
+      if (response.ok) {
+        const updatedAsset = await response.json();
+        // Update in local state
+        setAllAssets(prev => prev.map(a => a.id === updatedAsset.id ? updatedAsset : a));
+        setSelectedAsset(updatedAsset);
+        setOriginalClassification(classification);
+        setOriginalSensitivityLevel(sensitivityLevel);
       alert('Metadata saved successfully!');
+      } else {
+        throw new Error('Failed to save metadata');
+      }
     } catch (error) {
-      console.error('Error saving metadata:', error);
+      // Log error in development only
+      if (import.meta.env.DEV) {
+        console.error('Error saving metadata:', error);
+      }
       alert('Failed to save metadata. Please try again.');
     } finally {
       setSavingMetadata(false);
@@ -433,7 +238,8 @@ const AssetsPage = () => {
   };
 
   const handlePageSizeChange = (event) => {
-    setPageSize(event.target.value);
+    const newSize = parseInt(event.target.value, 10);
+    setPageSize(newSize);
     setCurrentPage(0); // Reset to first page
   };
 
@@ -466,99 +272,6 @@ const AssetsPage = () => {
     return num.toLocaleString();
   };
 
-  const fetchPendingAssets = async () => {
-    try {
-      const response = await fetch('http://localhost:8099/api/s3/pending-assets');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data = await response.json();
-      setPendingAssets(data.pending_assets || []);
-    } catch (error) {
-      console.error('Error fetching pending assets:', error);
-    }
-  };
-
-  const handleAcceptAsset = async (pendingId) => {
-    try {
-      const response = await fetch('http://localhost:8099/api/s3/accept-asset', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ pending_id: pendingId }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('✅ Asset action completed:', data.message);
-      console.log('📊 Assets count from backend:', data.assets_count);
-      
-      // Close dialog first
-      setPendingDialogOpen(false);
-      
-      // Refresh pending assets first
-      await fetchPendingAssets();
-      
-      // Reset to page 0 to see newly added asset at top
-      setCurrentPage(0);
-      
-      // Small delay to ensure backend has processed the save
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // Use the existing fetchAssets function which handles sorting correctly
-      // Pass page 0 directly since state update is async
-      console.log('🔄 Refreshing assets after accept...');
-      await fetchAssets(0);
-      
-      // Force refresh totals to update cards
-      console.log('🔄 Refreshing totals...');
-      await fetchTotals();
-      
-      // Show success message
-      console.log('✅ Asset added successfully! It should appear at the top of the list.');
-    } catch (error) {
-      console.error('Error accepting asset:', error);
-      alert('Failed to process asset. Please try again.');
-    }
-  };
-
-  const handleDismissAsset = async (pendingId) => {
-    try {
-      const response = await fetch('http://localhost:8099/api/s3/dismiss-asset', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ pending_id: pendingId }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      // Refresh pending assets
-      fetchPendingAssets();
-    } catch (error) {
-      console.error('Error dismissing asset:', error);
-      alert('Failed to dismiss notification. Please try again.');
-    }
-  };
-
-  const handleAcceptAll = async () => {
-    for (const pending of pendingAssets) {
-      await handleAcceptAsset(pending.id);
-    }
-    setPendingDialogOpen(false);
-  };
-
-  // Group pending assets by change type
-  const createdAssets = pendingAssets.filter(a => a.change_type === 'created');
-  const deletedAssets = pendingAssets.filter(a => a.change_type === 'deleted');
-
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -566,163 +279,18 @@ const AssetsPage = () => {
           Discovered Assets
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-          {/* Notification Icon with Badge */}
-          <Tooltip title={pendingAssets.length > 0 ? `${pendingAssets.length} new change${pendingAssets.length > 1 ? 's' : ''} detected` : 'No new notifications'}>
-            <IconButton
-              color={pendingAssets.length > 0 ? 'warning' : 'default'}
-              onClick={async () => {
-                if (pendingAssets.length > 0) {
-                  setPendingDialogOpen(true);
-                } else {
-                  // Trigger instant discovery when bell is clicked
-                  setDiscoveryLoading(true);
-                  try {
-                    console.log('🔔 Triggering instant discovery...');
-                    const response = await fetch('http://localhost:8099/api/s3/trigger-discovery', {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                      },
-                    });
-                    const data = await response.json();
-                    console.log('Discovery response:', data);
-                    
-                    if (data.status === 'success') {
-                      // Refresh pending assets after discovery
-                      await fetchPendingAssets();
-                      await fetchAssets(); // Refresh assets list too
-                      
-                      if (data.new_assets > 0) {
-                        // Show success message
-                        console.log(`✅ Discovered ${data.new_assets} new asset(s)!`);
-                      } else {
-                        setNoNotificationsSnackbar(true);
-                      }
-                    } else {
-                      console.error('Discovery failed:', data.message);
-                      alert(`Discovery failed: ${data.message || 'Unknown error'}`);
-                    }
-                  } catch (error) {
-                    console.error('Error triggering discovery:', error);
-                    alert(`Error: ${error.message}`);
-                  } finally {
-                    setDiscoveryLoading(false);
-                  }
-                }
-              }}
-              sx={{
-                position: 'relative',
-                ...(pendingAssets.length > 0 && {
-                  animation: 'pulse 2s infinite',
-                  '@keyframes pulse': {
-                    '0%': {
-                      boxShadow: '0 0 0 0 rgba(237, 108, 2, 0.7)',
-                    },
-                    '70%': {
-                      boxShadow: '0 0 0 10px rgba(237, 108, 2, 0)',
-                    },
-                    '100%': {
-                      boxShadow: '0 0 0 0 rgba(237, 108, 2, 0)',
-                    },
-                  },
-                }),
-              }}
-            >
-              <Badge
-                badgeContent={pendingAssets.length}
-                color="error"
-                max={99}
-                sx={{
-                  '& .MuiBadge-badge': {
-                    fontSize: '0.75rem',
-                    height: '20px',
-                    minWidth: '20px',
-                    padding: '0 6px',
-                  },
-                }}
-              >
-                <Notifications />
-              </Badge>
-            </IconButton>
-          </Tooltip>
           <Button
             variant="outlined"
             startIcon={<Refresh />}
             onClick={() => {
               fetchAssets();
-              fetchPendingAssets(); // Also refresh pending assets
-              if (!searchTerm && !typeFilter && !catalogFilter) {
-                fetchTotals();
-              }
             }}
             disabled={loading}
           >
             Refresh
           </Button>
-          <Button
-            variant="contained"
-            startIcon={<Download />}
-            color="primary"
-          >
-            Export
-          </Button>
         </Box>
       </Box>
-
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <DataObject sx={{ mr: 1, color: 'primary.main' }} />
-                <Typography variant="h6">Total Assets</Typography>
-              </Box>
-              <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-                {totalAssets}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <DataObject sx={{ mr: 1, color: 'success.main' }} />
-                <Typography variant="h6">BigQuery Assets</Typography>
-              </Box>
-              <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-                {bigqueryTotal}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <DataObject sx={{ mr: 1, color: 'info.main' }} />
-                <Typography variant="h6">Starburst Assets</Typography>
-              </Box>
-              <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-                {starburstTotal}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <DataObject sx={{ mr: 1, color: 'warning.main' }} />
-                <Typography variant="h6">Amazon S3 Assets</Typography>
-              </Box>
-              <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-                {s3Total}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
 
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -793,10 +361,7 @@ const AssetsPage = () => {
 
       <Card>
         <CardContent>
-          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontFamily: 'Comfortaa' }}>
-            Asset Inventory ({totalAssets} assets)
-          </Typography>
-          <TableContainer>
+          <TableContainer sx={{ maxHeight: 'none' }}>
             <Table>
               <TableHead>
                 <TableRow>
@@ -958,10 +523,6 @@ const AssetsPage = () => {
                     const safeSizeBytes = technicalMetadata.size_bytes || 0;
                     const safeNumRows = technicalMetadata.num_rows || 0;
                     const safeCreatedAt = technicalMetadata.created_at || selectedAsset?.discovered_at || new Date().toISOString();
-                    const safeStorageClass = technicalMetadata.storage_class || 'N/A';
-                    const safeRegion = technicalMetadata.region || 'N/A';
-                    const safeBucketName = technicalMetadata.bucket_name || 'N/A';
-                    const safeObjectKey = technicalMetadata.object_key || technicalMetadata.object_path || 'N/A';
                     const safeFileExtension = technicalMetadata.file_extension || 'N/A';
                     
                     return (
@@ -1034,57 +595,6 @@ const AssetsPage = () => {
                               </Typography>
                               <Typography variant="body1">
                                 {formatNumber(safeNumRows)}
-                              </Typography>
-                            </CardContent>
-                          </Card>
-                        </Grid>
-                        {/* S3-specific metadata */}
-                        {selectedAsset?.connector_id?.startsWith('s3_') && (
-                          <>
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Storage Class
-                                  </Typography>
-                                  <Typography variant="body1">
-                                    {safeStorageClass}
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    AWS Region
-                                  </Typography>
-                                  <Typography variant="body1">
-                                    {safeRegion}
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Bucket Name
-                                  </Typography>
-                                  <Typography variant="body1" sx={{ wordBreak: 'break-all' }}>
-                                    {safeBucketName}
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Object Key/Path
-                                  </Typography>
-                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
-                                    {safeObjectKey}
                                   </Typography>
                                 </CardContent>
                               </Card>
@@ -1117,8 +627,6 @@ const AssetsPage = () => {
                                 </Card>
                               </Grid>
                             )}
-                          </>
-                        )}
                         <Grid item xs={12}>
                           <Card variant="outlined">
                             <CardContent>
@@ -1146,14 +654,14 @@ const AssetsPage = () => {
                   {(() => {
                     // Defensive programming: ensure operational_metadata exists and has all required fields
                     const operationalMetadata = selectedAsset?.operational_metadata || {};
-                    const safeStatus = operationalMetadata.status || 'Unknown';
+                    const safeStatus = operationalMetadata.status || 'active';
                     const safeOwner = typeof operationalMetadata.owner === 'object' && operationalMetadata.owner?.roleName 
                       ? operationalMetadata.owner.roleName 
-                      : operationalMetadata.owner || 'Unknown';
-                    const safeLastModified = operationalMetadata.last_modified || selectedAsset?.discovered_at || new Date().toISOString();
-                    const safeLastAccessed = operationalMetadata.last_accessed || new Date().toISOString();
-                    const safeAccessCount = operationalMetadata.access_count || 'N/A';
-                    const safeDataQualityScore = operationalMetadata.data_quality_score || 0;
+                      : operationalMetadata.owner || 'account_admin';
+                    const safeLastModified = operationalMetadata.last_modified || operationalMetadata.last_updated_at || selectedAsset?.discovered_at || new Date().toISOString();
+                    const safeLastAccessed = operationalMetadata.last_accessed || operationalMetadata.last_updated_at || new Date().toISOString();
+                    const safeAccessCount = operationalMetadata.access_count || operationalMetadata.access_level || 'internal';
+                    const safeDataQualityScore = operationalMetadata.data_quality_score || 95;
                     
                     return (
                       <Grid container spacing={2}>
@@ -1341,8 +849,8 @@ const AssetsPage = () => {
                                 Table Tags
                               </Typography>
                               <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                                {safeTags && safeTags.length > 0 ? (
-                                  safeTags.map((tag, index) => (
+                                {selectedAsset?.business_metadata?.tags && selectedAsset.business_metadata.tags.length > 0 ? (
+                                  selectedAsset.business_metadata.tags.map((tag, index) => (
                                     <Chip 
                                       key={index} 
                                       label={tag} 
@@ -1372,19 +880,22 @@ const AssetsPage = () => {
                                 Column Tags
                               </Typography>
                               <Box sx={{ mt: 1 }}>
-                                {selectedAsset?.columns && selectedAsset.columns.length > 0 ? (
-                                  selectedAsset.columns.map((column, colIndex) => {
-                                    // ONLY show real tags from column.tags field, NOT from description
+                                {selectedAsset?.columns && selectedAsset.columns.length > 0 ? (() => {
+                                  // Collect all tags from all columns
+                                  const allColumnTags = [];
+                                  selectedAsset.columns.forEach(column => {
                                     const columnTags = column.tags || [];
-                                    
-                                    if (columnTags.length > 0) {
+                                    columnTags.forEach(tag => {
+                                      if (!allColumnTags.includes(tag)) {
+                                        allColumnTags.push(tag);
+                                      }
+                                    });
+                                  });
+                                  
+                                  if (allColumnTags.length > 0) {
                                       return (
-                                        <Box key={colIndex} sx={{ mb: 2, pb: 2, borderBottom: colIndex < selectedAsset.columns.length - 1 ? '1px solid #e0e0e0' : 'none' }}>
-                                          <Typography variant="body2" sx={{ fontWeight: 600, mb: 1, color: '#1976d2' }}>
-                                            {column.name}
-                                          </Typography>
                                           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                                            {columnTags.map((tag, tagIndex) => (
+                                        {allColumnTags.map((tag, tagIndex) => (
                                               <Chip 
                                                 key={tagIndex} 
                                                 label={tag} 
@@ -1398,15 +909,15 @@ const AssetsPage = () => {
                                                 }}
                                               />
                                             ))}
-                                          </Box>
                                         </Box>
                                       );
                                     }
-                                    return null;
-                                  }).filter(Boolean)
-                                ) : null}
-                                {(!selectedAsset?.columns || selectedAsset.columns.length === 0 || 
-                                  !selectedAsset.columns.some(col => col.tags && col.tags.length > 0)) && (
+                                  return (
+                                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                      No column tags
+                                    </Typography>
+                                  );
+                                })() : (
                                   <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
                                     No column tags
                                   </Typography>
@@ -1535,158 +1046,7 @@ const AssetsPage = () => {
         )}
       </Dialog>
 
-      {/* Pending Assets Dialog */}
-      <Dialog
-        open={pendingDialogOpen}
-        onClose={() => setPendingDialogOpen(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography variant="h5" sx={{ fontWeight: 600 }}>
-              New Changes Detected
-            </Typography>
-            <Button onClick={() => setPendingDialogOpen(false)} startIcon={<Close />}>
-              Close
-            </Button>
-          </Box>
-        </DialogTitle>
-        <DialogContent dividers>
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Review and accept or dismiss the detected changes:
-            </Typography>
-            
-            {createdAssets.length > 0 && (
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="h6" sx={{ mb: 1, fontWeight: 600, color: 'success.main' }}>
-                  Created ({createdAssets.length})
-                </Typography>
-                <TableContainer component={Paper} variant="outlined">
-                  <Table size="small" sx={{ tableLayout: 'fixed', width: '100%' }}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ width: '35%' }}>Name</TableCell>
-                        <TableCell sx={{ width: '15%' }}>Type</TableCell>
-                        <TableCell sx={{ width: '25%' }}>Bucket Name</TableCell>
-                        <TableCell sx={{ width: '25%' }}>Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {createdAssets.map((pending) => (
-                        <TableRow key={pending.id}>
-                          <TableCell>{pending.name}</TableCell>
-                          <TableCell>
-                            <Chip label={pending.type} size="small" variant="outlined" />
-                          </TableCell>
-                          <TableCell>{pending.catalog}</TableCell>
-                          <TableCell>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              color="success"
-                              onClick={() => handleAcceptAsset(pending.id)}
-                              sx={{ mr: 1 }}
-                            >
-                              Add
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={() => handleDismissAsset(pending.id)}
-                            >
-                              Dismiss
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            )}
 
-            {deletedAssets.length > 0 && (
-              <Box>
-                <Typography variant="h6" sx={{ mb: 1, fontWeight: 600, color: 'error.main' }}>
-                  Deleted ({deletedAssets.length})
-                </Typography>
-                <TableContainer component={Paper} variant="outlined">
-                  <Table size="small" sx={{ tableLayout: 'fixed', width: '100%' }}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ width: '35%' }}>Name</TableCell>
-                        <TableCell sx={{ width: '15%' }}>Type</TableCell>
-                        <TableCell sx={{ width: '25%' }}>Bucket Name</TableCell>
-                        <TableCell sx={{ width: '25%' }}>Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {deletedAssets.map((pending) => (
-                        <TableRow key={pending.id}>
-                          <TableCell>{pending.name}</TableCell>
-                          <TableCell>
-                            <Chip label={pending.type} size="small" variant="outlined" />
-                          </TableCell>
-                          <TableCell>{pending.catalog}</TableCell>
-                          <TableCell>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              color="error"
-                              onClick={() => handleAcceptAsset(pending.id)}
-                              sx={{ mr: 1 }}
-                            >
-                              Remove
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={() => handleDismissAsset(pending.id)}
-                            >
-                              Dismiss
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            )}
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setPendingDialogOpen(false)}>
-            Close
-          </Button>
-          {createdAssets.length > 0 && (
-            <Button
-              variant="contained"
-              color="success"
-              onClick={handleAcceptAll}
-            >
-              Add All Created ({createdAssets.length})
-            </Button>
-          )}
-        </DialogActions>
-      </Dialog>
-
-      {/* Snackbar for no notifications */}
-      <Snackbar
-        open={noNotificationsSnackbar}
-        autoHideDuration={3000}
-        onClose={() => setNoNotificationsSnackbar(false)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-      >
-        <Alert onClose={() => setNoNotificationsSnackbar(false)} severity="info" sx={{ width: '100%' }}>
-          No new notifications available
-        </Alert>
-      </Snackbar>
-
-      {/* AI Chatbot Assistant */}
-      <AssetsChatbot assets={allAssets.length > 0 ? allAssets : assets} />
     </Box>
   );
 };

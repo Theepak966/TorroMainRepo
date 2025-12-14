@@ -7,12 +7,10 @@ import CssBaseline from '@mui/material/CssBaseline';
 import Layout from './components/Layout';
 
 // Pages
-import DashboardPage from './pages/DashboardPage';
-import ConnectorsPage from './pages/ConnectorsPage';
 import AssetsPage from './pages/AssetsPage';
 import MarketplacePage from './pages/MarketplacePage';
 import DataLineagePage from './pages/DataLineagePage';
-import TrinoGovernanceControlPage from './pages/TrinoGovernanceControlPage';
+import ConnectorsPage from './pages/ConnectorsPage';
 
 // Theme
 const theme = createTheme({
@@ -87,12 +85,11 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<Layout />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="connectors" element={<ConnectorsPage />} />
+            <Route index element={<AssetsPage />} />
             <Route path="assets" element={<AssetsPage />} />
             <Route path="lineage" element={<DataLineagePage />} />
             <Route path="marketplace" element={<MarketplacePage />} />
-            <Route path="governance" element={<TrinoGovernanceControlPage />} />
+            <Route path="connectors" element={<ConnectorsPage />} />
           </Route>
         </Routes>
       </Router>

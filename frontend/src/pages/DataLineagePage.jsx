@@ -213,200 +213,132 @@ const DataLineagePage = () => {
   const [activeDetailTab, setActiveDetailTab] = useState('basic');
   const [selectedNode, setSelectedNode] = useState(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
-  const [asOf, setAsOf] = useState('');
   const [avgConfidence, setAvgConfidence] = useState(null);
   const [columnPage, setColumnPage] = useState(0);
   const [columnsPerPage] = useState(10);
   const [manualLineageOpen, setManualLineageOpen] = useState(false);
 
-  // Fetch lineage data
   const fetchLineage = async () => {
-    try {
       setLoading(true);
-      setError(null);
-      const url = new URL('http://localhost:8099/api/lineage');
-      if (asOf && asOf.trim()) {
-        url.searchParams.set('as_of', new Date(asOf).toISOString());
-      }
-      const response = await fetch(url.toString());
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
-      
-      console.log('🔵 Lineage API Response:', data);
-      console.log('🔵 Number of nodes received:', data.nodes?.length || 0);
-      console.log('🔵 Number of edges received:', data.edges?.length || 0);
-      console.log('🔵 Column relationships:', data.column_relationships);
-      console.log('🔵 Sample nodes:', data.nodes?.slice(0, 3));
-      
-      setColumnRelationships(data.column_relationships || 0);
-      setAvgConfidence(typeof data.avg_confidence === 'number' ? data.avg_confidence : null);
-      
-      // If no data, clear everything but don't show error yet
-      // The error should only show if there are truly no assets at all
-      if (!data.nodes || data.nodes.length === 0) {
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets`);
+      if (response.ok) {
+        const assets = await response.json();
+        
+        // Convert assets to lineage nodes with columns
+        const lineageNodes = assets.map(asset => ({
+          id: asset.id,
+          name: asset.name,
+          type: asset.type,
+          catalog: asset.catalog,
+          connector_id: asset.connector_id,
+          columns: asset.columns || [],
+        }));
+        
+        // Create edges with column lineage based on common columns
+        const edges = [];
+        const catalogMap = new Map();
+        lineageNodes.forEach(node => {
+          if (node.catalog) {
+            if (!catalogMap.has(node.catalog)) {
+              catalogMap.set(node.catalog, []);
+            }
+            catalogMap.get(node.catalog).push(node);
+          }
+        });
+        
+        // Create edges between nodes in the same catalog with column lineage
+        catalogMap.forEach((nodes, catalog) => {
+          for (let i = 0; i < nodes.length - 1; i++) {
+            const sourceNode = nodes[i];
+            const targetNode = nodes[i + 1];
+            
+            // Find common columns between source and target
+            const sourceColumns = sourceNode.columns || [];
+            const targetColumns = targetNode.columns || [];
+            const columnLineage = [];
+            
+            // Match columns by name (handle both object and string formats)
+            sourceColumns.forEach(srcCol => {
+              const srcColName = typeof srcCol === 'string' ? srcCol : (srcCol.name || srcCol.column_name || '');
+              if (!srcColName) return;
+              
+              const matchingTgtCol = targetColumns.find(tgtCol => {
+                const tgtColName = typeof tgtCol === 'string' ? tgtCol : (tgtCol.name || tgtCol.column_name || '');
+                return tgtColName.toLowerCase() === srcColName.toLowerCase();
+              });
+              
+              if (matchingTgtCol) {
+                const tgtColName = typeof matchingTgtCol === 'string' ? matchingTgtCol : (matchingTgtCol.name || matchingTgtCol.column_name || '');
+                columnLineage.push({
+                  source_column: srcColName,
+                  target_column: tgtColName,
+                  source_table: sourceNode.name || sourceNode.id,
+                  target_table: targetNode.name || targetNode.id,
+                  relationship: 'direct_mapping',
+                  relationship_type: 'direct_mapping',
+                  transformation: 'pass_through',
+                  transformation_type: 'pass_through',
+                  confidence_score: 1.0,
+                });
+              }
+            });
+            
+            if (columnLineage.length > 0) {
+            }
+            
+            edges.push({
+              id: `${sourceNode.id}-${targetNode.id}`,
+              source: sourceNode.id,
+              target: targetNode.id,
+              type: 'catalog',
+              column_lineage: columnLineage,
+              relationship: columnLineage.length > 0 ? `${columnLineage.length} columns` : 'feeds into',
+            });
+          }
+        });
+        
+        const lineageData = {
+          nodes: lineageNodes,
+          edges: edges,
+          rawData: { nodes: lineageNodes, edges: edges },
+        };
+        
+        setFullLineageData(lineageData);
+        
+        // Don't show nodes/edges by default - wait for asset selection
+        setNodes([]);
+        setEdges([]);
+      } else {
         setFullLineageData({ nodes: [], edges: [], rawData: { nodes: [], edges: [] } });
         setNodes([]);
         setEdges([]);
-        // Don't set error here - let the UI component decide based on whether assets exist
-        setError(null);
-        return;
       }
-
-      // Layout nodes and DISPLAY ALL BY DEFAULT (no selection required!)
-      const layoutedNodes = layoutNodes(data.nodes, data.edges);
-      
-      // Determine pipeline stage for each node
-      const getPipelineStage = (node) => {
-        const nameLower = (node.name || '').toLowerCase();
-        const catalogLower = (node.catalog || '').toLowerCase();
-        const connectorId = node.connector_id || '';
-        
-        if (connectorId === 'demo_etl_pipeline' || catalogLower.includes('demo')) {
-          if (catalogLower.includes('crm') || catalogLower.includes('source')) {
-            return { stage: 'source', color: '#9c27b0', label: 'SOURCE' };
-          } else if (catalogLower.includes('staging') || nameLower.includes('raw')) {
-            return { stage: 'extract', color: '#ff9800', label: 'EXTRACT' };
-          } else if (catalogLower.includes('warehouse') || nameLower.includes('dim') || nameLower.includes('fact')) {
-            return { stage: 'transform', color: '#2196f3', label: 'TRANSFORM' };
-          } else if (catalogLower.includes('analytics') || catalogLower.includes('report')) {
-            return { stage: 'load', color: '#4caf50', label: 'LOAD' };
-          }
-        }
-        return null;
-      };
-      
-      const flowNodes = layoutedNodes.map((node, index) => {
-        const pipelineInfo = getPipelineStage(node);
-        const isPipelineNode = pipelineInfo !== null;
-        
-        return {
-          id: node.id,
-          type: 'custom',
-          position: node.position,
-          sourcePosition: 'right',
-          targetPosition: 'left',
-          style: isPipelineNode ? {
-            border: `3px solid ${pipelineInfo.color}`,
-            backgroundColor: `${pipelineInfo.color}15`,
-          } : {},
-          data: {
-            label: node.name,
-            name: node.name,
-            type: node.type,
-            catalog: node.catalog,
-            connector_id: node.connector_id,
-            source_system: node.source_system,
-            id: node.id,
-            onNodeClick: handleNodeClick,
-            pipelineStage: pipelineInfo?.stage,
-            pipelineLabel: pipelineInfo?.label,
-            pipelineColor: pipelineInfo?.color,
-            isPipelineNode: isPipelineNode,
-          },
-        };
-      });
-
-      // Helper to determine pipeline relationship type
-      const getPipelineRelationship = (edge) => {
-        const relationship = (edge.relationship || '').toLowerCase();
-        if (relationship.includes('extract') || relationship.includes('etl_extract')) {
-          return { type: 'extract', color: '#ff9800', label: 'EXTRACT' };
-        } else if (relationship.includes('transform') || relationship.includes('etl_transform')) {
-          return { type: 'transform', color: '#2196f3', label: 'TRANSFORM' };
-        } else if (relationship.includes('load') || relationship.includes('etl_load')) {
-          return { type: 'load', color: '#4caf50', label: 'LOAD' };
-        }
-        return null;
-      };
-      
-      const flowEdges = data.edges.map((edge, index) => {
-        const columnCount = edge.column_lineage ? edge.column_lineage.length : 0;
-        const pipelineRel = getPipelineRelationship(edge);
-        const isPipelineEdge = pipelineRel !== null;
-        
-        // Determine edge color based on pipeline stage or column lineage
-        let edgeColor = '#64b5f6';
-        let edgeWidth = 1;
-        if (isPipelineEdge) {
-          edgeColor = pipelineRel.color;
-          edgeWidth = 2.5;
-        } else if (columnCount > 0) {
-          edgeColor = '#1976d2';
-          edgeWidth = 1.5;
-        }
-        
-        const label = isPipelineEdge 
-          ? `${pipelineRel.label} (${columnCount} cols)`
-          : columnCount > 0 
-            ? `${columnCount} columns` 
-            : edge.relationship || 'feeds into';
-        
-        return {
-          id: `edge-${index}`,
-          source: edge.source,
-          target: edge.target,
-          type: 'smoothstep',
-          animated: isPipelineEdge || columnCount > 0,
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: isPipelineEdge ? 16 : 12,
-            height: isPipelineEdge ? 16 : 12,
-            color: edgeColor,
-          },
-          style: {
-            strokeWidth: edgeWidth,
-            stroke: edgeColor,
-            strokeDasharray: isPipelineEdge ? '0' : (columnCount > 0 ? '0' : '5,5'),
-            opacity: isPipelineEdge ? 1 : 0.8,
-          },
-          label: label,
-          labelStyle: { 
-            fill: '#ffffff', 
-            fontWeight: 600, 
-            fontSize: isPipelineEdge ? 12 : 11,
-            textShadow: '0 1px 2px rgba(0,0,0,0.5)'
-          },
-          labelBgStyle: { 
-            fill: edgeColor, 
-            fillOpacity: 0.95,
-            padding: isPipelineEdge ? '6px 10px' : '4px 8px',
-            borderRadius: '12px',
-            stroke: '#ffffff',
-            strokeWidth: 1
-          },
-          data: {
-            column_lineage: edge.column_lineage || [],
-            relationship: edge.relationship,
-            onEdgeClick: handleEdgeClick,
-          },
-        };
-      });
-
-      // Store data AND DISPLAY ALL ASSETS BY DEFAULT
-      setFullLineageData({ nodes: flowNodes, edges: flowEdges, rawData: data });
-      setNodes(flowNodes);
-      setEdges(flowEdges);
-      setError(null);
-      
     } catch (error) {
       console.error('Error fetching lineage:', error);
-      setError(`Failed to load lineage data: ${error.message}`);
+      setFullLineageData({ nodes: [], edges: [], rawData: { nodes: [], edges: [] } });
+      setNodes([]);
+      setEdges([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetch assets for details
   const fetchAssets = async () => {
     try {
-      const response = await fetch('http://localhost:8099/api/assets?page=0&size=100');
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets`);
+      if (response.ok) {
       const data = await response.json();
-      // API returns { assets: [...], pagination: {...} }
-      setAssets(Array.isArray(data.assets) ? data.assets : []);
+        setAssets(data);
+      } else {
+        setAssets([]);
+      }
     } catch (error) {
+      if (import.meta.env.DEV) {
       console.error('Error fetching assets:', error);
+      }
       setAssets([]);
     }
   };
@@ -511,31 +443,16 @@ const DataLineagePage = () => {
       // Find asset in local assets array
       const asset = assets.find(a => a.id === nodeId);
       
-      let assetData = null;
-      if (!asset) {
-        // Fetch from API if not in local array
-        const response = await fetch(`http://localhost:8099/api/assets/${encodeURIComponent(nodeId)}`);
-        if (response.ok) {
-          assetData = await response.json();
+      const assetData = asset || { id: nodeId, name: nodeId, error: 'Asset details not found' };
           setSelectedNode(assetData);
-        } else {
-          setSelectedNode({ id: nodeId, name: nodeId, error: 'Asset details not found' });
-        }
-      } else {
-        // Fetch detailed info
-        const response = await fetch(`http://localhost:8099/api/assets/${encodeURIComponent(nodeId)}`);
-        if (response.ok) {
-          assetData = await response.json();
-          setSelectedNode(assetData);
-        } else {
-          assetData = asset;
-          setSelectedNode(asset);
-        }
-      }
       
       setDetailsDialogOpen(true);
     } catch (error) {
-      console.error('Error fetching node details:', error);
+      if (import.meta.env.DEV) {
+        if (import.meta.env.DEV) {
+        console.error('Error fetching node details:', error);
+      }
+      }
       setSelectedNode({ id: nodeId, name: nodeId, error: error.message });
       setDetailsDialogOpen(true);
     }
@@ -557,24 +474,19 @@ const DataLineagePage = () => {
     }
 
     try {
-      // Always fetch full asset details from API to get pipeline_metadata
-      const response = await fetch(`http://localhost:8099/api/assets/${encodeURIComponent(assetId)}`);
-      if (response.ok) {
-        const assetData = await response.json();
-        setSelectedAssetDetails(assetData);
-        setShowAssetDetails(true);
-      } else {
-        // Fallback to lineage data if API fails
         const asset = fullLineageData.rawData?.nodes?.find(n => n.id === assetId);
         if (asset) {
           setSelectedAssetDetails(asset);
           setShowAssetDetails(true);
         } else {
+          if (import.meta.env.DEV) {
           console.error('Asset not found:', assetId);
         }
       }
     } catch (error) {
-      console.error('Error fetching asset details:', error);
+      if (import.meta.env.DEV) {
+        console.error('Error fetching asset details:', error);
+      }
     }
   };
 
@@ -598,10 +510,10 @@ const DataLineagePage = () => {
   // Filter lineage for selected asset
   const handleAssetSelection = (assetId) => {
     if (!assetId) {
-      // Clear selection - show ALL assets
+      // Clear selection - show nothing
       setSelectedAssetForLineage(null);
-      setNodes(fullLineageData.nodes || []);
-      setEdges(fullLineageData.edges || []);
+      setNodes([]);
+      setEdges([]);
       return;
     }
 
@@ -640,34 +552,149 @@ const DataLineagePage = () => {
 
     // Re-layout the filtered graph
     const layoutedNodes = layoutNodes(filteredNodes, filteredEdges);
+    
+    // Re-apply pipeline detection for filtered nodes (same logic as main fetch)
+    const getPipelineStageForFiltered = (node) => {
+      const nameLower = (node.name || '').toLowerCase();
+      const catalogLower = (node.catalog || '').toLowerCase();
+      const schemaLower = (node.schema || '').toLowerCase();
+      const nodeIdLower = (node.id || '').toLowerCase();
+      const connectorId = (node.connector_id || '').toLowerCase();
+      const nodeType = (node.type || '').toUpperCase();
+      
+      const isETLPipeline = 
+        connectorId === 'demo_etl_pipeline' || 
+        connectorId === 'sample_connector' ||
+        catalogLower.includes('demo') ||
+        catalogLower === 'etl' ||
+        nodeIdLower.includes(':etl:') ||
+        nodeIdLower.includes('sample:etl:') ||
+        schemaLower === 'source' ||
+        schemaLower === 'staging' ||
+        schemaLower === 'destination' ||
+        nodeType === 'API';
+      
+      if (isETLPipeline) {
+        if (catalogLower.includes('crm') || 
+            catalogLower.includes('source') || 
+            schemaLower === 'source' ||
+            nodeIdLower.includes(':source:') ||
+            nodeIdLower.includes('sample:etl:source:') ||
+            nodeType === 'API'
+            ) {
+          return { stage: 'source', color: '#9c27b0', label: 'SOURCE' };
+        } 
+        else if (catalogLower.includes('staging') || 
+                 schemaLower === 'staging' ||
+                 nameLower.includes('raw') ||
+                 nameLower.includes('staging') ||
+                 nameLower.includes('transformed') ||
+                 nodeIdLower.includes(':staging:') ||
+                 nodeIdLower.includes('sample:etl:staging:')) {
+          return { stage: 'extract', color: '#ff9800', label: 'EXTRACT' };
+        } 
+        else if (catalogLower.includes('warehouse') || 
+                 nameLower.includes('dim') || 
+                 nameLower.includes('fact') ||
+                 nameLower.includes('transform')) {
+          return { stage: 'transform', color: '#2196f3', label: 'TRANSFORM' };
+        } 
+        else if (catalogLower.includes('analytics') || 
+                 catalogLower.includes('report') ||
+                 schemaLower === 'destination' ||
+                 nameLower.includes('destination') ||
+                 nameLower.includes('warehouse') ||
+                 nodeIdLower.includes(':destination:') ||
+                 nodeIdLower.includes('sample:etl:destination:')) {
+          return { stage: 'load', color: '#4caf50', label: 'LOAD' };
+        }
+      }
+      return null;
+    };
+    
     const flowNodes = layoutedNodes.map((node) => {
       const originalNode = filteredNodes.find(n => n.id === node.id);
+      const pipelineInfo = getPipelineStageForFiltered(node);
+      const isPipelineNode = pipelineInfo !== null;
+      
       return {
         id: node.id,
         type: 'custom',
         position: node.position,
         sourcePosition: 'right',
         targetPosition: 'left',
+        style: isPipelineNode ? {
+          border: `3px solid ${pipelineInfo.color}`,
+          backgroundColor: `${pipelineInfo.color}15`,
+        } : {},
         data: {
           label: node.name,
           name: node.name,
           type: node.type,
           catalog: node.catalog,
+          schema: node.schema,
           connector_id: node.connector_id,
           source_system: node.source_system,
           id: node.id,
           isSelected: node.id === assetId,
           onNodeClick: handleNodeClick,
+          pipelineStage: pipelineInfo?.stage,
+          pipelineLabel: pipelineInfo?.label,
+          pipelineColor: pipelineInfo?.color,
+          isPipelineNode: isPipelineNode,
         },
       };
     });
 
+    // Helper to determine pipeline relationship type for filtered edges
+    const getPipelineRelationshipForFiltered = (edge) => {
+      const relationship = (edge.relationship || '').toLowerCase();
+      const sourceId = (edge.source || '').toLowerCase();
+      const targetId = (edge.target || '').toLowerCase();
+      
+      if (relationship.includes('extract') || relationship.includes('etl_extract')) {
+        return { type: 'extract', color: '#ff9800', label: 'EXTRACT' };
+      } else if (relationship.includes('transform') || relationship.includes('etl_transform')) {
+        return { type: 'transform', color: '#2196f3', label: 'TRANSFORM' };
+      } else if (relationship.includes('load') || relationship.includes('etl_load')) {
+        return { type: 'load', color: '#4caf50', label: 'LOAD' };
+      }
+      
+      // Check by node IDs for ETL pipeline patterns
+      if (sourceId.includes('sample:etl:') || targetId.includes('sample:etl:')) {
+        if (sourceId.includes(':source:') && targetId.includes(':staging:')) {
+          return { type: 'extract', color: '#ff9800', label: 'EXTRACT' };
+        }
+        if (sourceId.includes(':staging:') && targetId.includes(':destination:')) {
+          return { type: 'load', color: '#4caf50', label: 'LOAD' };
+        }
+      }
+      
+      return null;
+    };
+    
     // Create flow edges with proper structure
     const flowEdges = filteredEdges.map((edge, index) => {
       const columnCount = edge.column_lineage ? edge.column_lineage.length : 0;
-      const label = columnCount > 0 
-        ? `${columnCount} columns` 
-        : edge.relationship || 'feeds into';
+      const pipelineRel = getPipelineRelationshipForFiltered(edge);
+      const isPipelineEdge = pipelineRel !== null;
+      
+      // Determine edge color based on pipeline stage or column lineage
+      let edgeColor = '#64b5f6';
+      let edgeWidth = 1;
+      if (isPipelineEdge) {
+        edgeColor = pipelineRel.color;
+        edgeWidth = 2.5;
+      } else if (columnCount > 0) {
+        edgeColor = '#1976d2';
+        edgeWidth = 1.5;
+      }
+      
+      const label = isPipelineEdge 
+        ? `${pipelineRel.label} (${columnCount} cols)`
+        : columnCount > 0 
+          ? `${columnCount} columns` 
+          : edge.relationship || 'feeds into';
       
       return {
         id: `${edge.source}->${edge.target}`,
@@ -676,30 +703,30 @@ const DataLineagePage = () => {
         sourceHandle: null,
         targetHandle: null,
         type: 'smoothstep',
-        animated: columnCount > 0,
+        animated: isPipelineEdge || columnCount > 0,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          width: 12,
-          height: 12,
-          color: columnCount > 0 ? '#1976d2' : '#64b5f6',
+          width: isPipelineEdge ? 16 : 12,
+          height: isPipelineEdge ? 16 : 12,
+          color: edgeColor,
         },
         style: {
-          strokeWidth: columnCount > 0 ? 1.5 : 1,
-          stroke: columnCount > 0 ? '#1976d2' : '#64b5f6',
-          strokeDasharray: columnCount > 0 ? '0' : '5,5',
-          opacity: 0.8,
+          strokeWidth: edgeWidth,
+          stroke: edgeColor,
+          strokeDasharray: isPipelineEdge ? '0' : (columnCount > 0 ? '0' : '5,5'),
+          opacity: isPipelineEdge ? 1 : 0.8,
         },
         label: label,
         labelStyle: { 
           fill: '#ffffff', 
           fontWeight: 600, 
-          fontSize: 11,
+          fontSize: isPipelineEdge ? 12 : 11,
           textShadow: '0 1px 2px rgba(0,0,0,0.3)'
         },
         labelBgStyle: { 
-          fill: columnCount > 0 ? '#1976d2' : '#64b5f6', 
+          fill: edgeColor, 
           fillOpacity: 0.9,
-          padding: '4px 8px',
+          padding: isPipelineEdge ? '6px 10px' : '4px 8px',
           borderRadius: '12px',
           stroke: '#ffffff',
           strokeWidth: 1
@@ -712,28 +739,26 @@ const DataLineagePage = () => {
       };
     });
 
-    console.log(`✅ Created ${flowEdges.length} edges for ${flowNodes.length} nodes`);
-    console.log('Sample edge:', flowEdges[0]);
 
     setNodes(flowNodes);
     setEdges(flowEdges);
   };
 
-  // Apply filters
-  const filteredNodes = nodes.filter(node => {
+  // Apply filters - only if an asset is selected
+  const filteredNodes = selectedAssetForLineage ? nodes.filter(node => {
     const matchesSearch = !searchTerm || 
       node.data.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       node.data.catalog.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = filterType === 'all' || node.data.type === filterType;
     const matchesSource = filterSource === 'all' || node.data.source_system === filterSource;
     return matchesSearch && matchesType && matchesSource;
-  });
+  }) : [];
 
-  const filteredEdges = edges.filter(edge => {
+  const filteredEdges = selectedAssetForLineage ? edges.filter(edge => {
     const sourceExists = filteredNodes.find(n => n.id === edge.source);
     const targetExists = filteredNodes.find(n => n.id === edge.target);
     return sourceExists && targetExists;
-  });
+  }) : [];
 
   // Get unique types and sources for filters from full data
   const uniqueTypes = [...new Set(fullLineageData.rawData?.nodes?.map(n => n.type) || [])];
@@ -898,17 +923,6 @@ const DataLineagePage = () => {
               </FormControl>
             </Grid>
             <Grid item xs={12} md={2}>
-              <TextField
-                fullWidth
-                size="small"
-                type="datetime-local"
-                label="As of"
-                value={asOf}
-                onChange={(e) => setAsOf(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-            <Grid item xs={12} md={2}>
               <Button
                 fullWidth
                 variant="outlined"
@@ -917,7 +931,6 @@ const DataLineagePage = () => {
                   setSearchTerm('');
                   setFilterType('all');
                   setFilterSource('all');
-                  setAsOf('');
                   handleAssetSelection(null);
                 }}
               >
@@ -934,69 +947,30 @@ const DataLineagePage = () => {
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
             <CircularProgress />
           </Box>
+        ) : !selectedAssetForLineage ? (
+          <Box sx={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            height: '100%',
+            textAlign: 'center',
+            color: 'text.secondary'
+          }}>
+            <AccountTree sx={{ fontSize: 80, color: '#ddd', mb: 2 }} />
+            <Typography variant="h5" sx={{ mb: 1, fontWeight: 500 }}>
+              Select asset to see lineage
+                  </Typography>
+                  <Typography variant="body2">
+              Choose an asset from the dropdown above to view its data lineage graph
+                  </Typography>
+                  </Box>
         ) : filteredNodes.length === 0 ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 4 }}>
-            <Alert 
-              severity={fullLineageData.rawData?.nodes?.length > 0 ? "info" : "warning"} 
-              sx={{ maxWidth: 600 }}
-            >
-              {fullLineageData.rawData?.nodes?.length > 0 ? (
-                <>
-                  <Typography variant="h6" gutterBottom>
-                    No Assets Match Your Filters
-                  </Typography>
+            <Alert severity="info">
                   <Typography variant="body2">
-                    Adjust the search term, type, or source filters above to see your data assets.
+                No lineage relationships found for this asset.
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, fontStyle: 'italic' }}>
-                    💡 Clear all filters to view all {fullLineageData.rawData?.nodes?.length || 0} available assets.
-                  </Typography>
-                  <Box sx={{ mt: 3, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                    <Chip 
-                      label={`${fullLineageData.rawData?.nodes?.length || 0} Total Assets`} 
-                      color="primary" 
-                      size="small"
-                      title="Tables and Views available"
-                    />
-                    <Chip 
-                      label={`${columnRelationships} Column Links`} 
-                      color="success" 
-                      size="small"
-                    />
-                    {avgConfidence !== null && (
-                      <Chip 
-                        label={`Avg Confidence ${(avgConfidence * 100).toFixed(1)}%`} 
-                        color="default" 
-                        size="small"
-                        variant="outlined"
-                      />
-                    )}
-                    <Chip 
-                      label={`${fullLineageData.rawData?.edges?.length || 0} Relationships`} 
-                      color="info" 
-                      size="small"
-                    />
-                  </Box>
-                </>
-              ) : (
-                <>
-                  <Typography variant="h6" gutterBottom>
-                    No Lineage Data Available
-                  </Typography>
-                  <Typography variant="body2">
-                    No lineage relationships found. This could mean:
-                  </Typography>
-                  <ul style={{ marginTop: 8 }}>
-                    <li>No assets have been discovered yet - run a connector scan</li>
-                    <li>Assets exist but have no Views (views define data lineage)</li>
-                    <li>Views exist but don't reference other tables/views in their SQL</li>
-                    <li>Connectors need to be properly configured</li>
-                  </ul>
-                  <Typography variant="body2" sx={{ mt: 2, fontStyle: 'italic', color: 'text.secondary' }}>
-                    💡 Tip: Discover assets with Views to see lineage relationships!
-                  </Typography>
-                </>
-              )}
             </Alert>
           </Box>
         ) : (
@@ -2111,28 +2085,11 @@ const DataLineagePage = () => {
               <Button onClick={handleCloseDialog}>Close</Button>
               <Button 
                 variant="contained" 
-                onClick={async () => {
-                  try {
-                    // Fetch full asset details from API
-                    const response = await fetch(`http://localhost:8099/api/assets/${encodeURIComponent(selectedNode.id)}`);
-                    if (response.ok) {
-                      const data = await response.json();
-                      setSelectedAssetDetails(data);
-                      setActiveDetailTab('basic');
-                      handleCloseDialog();
-                    } else {
-                      // Fallback to selectedNode if API fails
+                onClick={() => {
+                  // Backend removed - use local node data
                       setSelectedAssetDetails(selectedNode);
                       setActiveDetailTab('basic');
                       handleCloseDialog();
-                    }
-                  } catch (error) {
-                    console.error('Error fetching full asset details:', error);
-                    // Fallback to selectedNode if API fails
-                    setSelectedAssetDetails(selectedNode);
-                    setActiveDetailTab('basic');
-                    handleCloseDialog();
-                  }
                 }}
               >
                 View Full Details
@@ -2191,7 +2148,7 @@ const DataLineagePage = () => {
                                 {colRel.source_column}
                               </Typography>
                               <Typography variant="caption" color="text.secondary">
-                                {colRel.source_table.split('.').pop()}
+                                {colRel.source_table ? (colRel.source_table.includes('.') ? colRel.source_table.split('.').pop() : colRel.source_table) : '-'}
                               </Typography>
                             </Box>
                           </TableCell>
@@ -2206,25 +2163,25 @@ const DataLineagePage = () => {
                                 {colRel.target_column}
                               </Typography>
                               <Typography variant="caption" color="text.secondary">
-                                {colRel.target_table.split('.').pop()}
+                                {colRel.target_table ? (colRel.target_table.includes('.') ? colRel.target_table.split('.').pop() : colRel.target_table) : '-'}
                               </Typography>
                             </Box>
                           </TableCell>
                           <TableCell>
                             <Chip 
-                              label={colRel.relationship_type.replace('_', ' ')} 
+                              label={(colRel.relationship_type || colRel.relationship || 'direct_mapping').replace(/_/g, ' ')} 
                               size="small" 
                               color={
-                                colRel.relationship_type === 'direct_match' ? 'success' : 
-                                colRel.relationship_type === 'transformed' ? 'warning' : 'info'
+                                (colRel.relationship_type || colRel.relationship || '').includes('direct') ? 'success' : 
+                                (colRel.relationship_type || colRel.relationship || '').includes('transform') ? 'warning' : 'info'
                               }
                             />
                           </TableCell>
                           <TableCell>
-                            {colRel.transformation_type ? (
+                            {colRel.transformation_type || colRel.transformation ? (
                               <Box>
                                 <Chip 
-                                  label={colRel.transformation_type} 
+                                  label={colRel.transformation_type || colRel.transformation || 'pass_through'} 
                                   size="small" 
                                   color="primary"
                                   variant="outlined"

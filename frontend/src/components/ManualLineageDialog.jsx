@@ -54,13 +54,7 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
   }, [open]);
 
   const fetchAssets = async () => {
-    try {
-      const response = await fetch('http://localhost:8099/api/assets?page=0&size=1000');
-      const data = await response.json();
-      setAssets(data.assets || []);
-    } catch (error) {
-      console.error('Error fetching assets:', error);
-    }
+    setAssets([]);
   };
 
   const handleAddColumnMapping = () => {
@@ -104,55 +98,9 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
         notes: notes || `Manual lineage entry created via UI`
       };
 
-      console.log('Submitting lineage proposal:', proposalData);
 
-      const url = 'http://localhost:8099/api/lineage/curation/propose';
-      console.log('Making request to:', url);
-      console.log('Request payload:', proposalData);
-      
-      let response;
-      try {
-        response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(proposalData),
-          credentials: 'include',
-          mode: 'cors'
-        });
-        console.log('Response received:', response.status, response.statusText);
-      } catch (fetchError) {
-        // Handle network errors (CORS, connection refused, etc.)
-        console.error('Fetch error details:', {
-          error: fetchError,
-          message: fetchError.message,
-          name: fetchError.name,
-          stack: fetchError.stack
-        });
-        throw new Error(`Unable to connect to the server. Please check if the backend is running on http://localhost:8099. Error: ${fetchError.message}`);
-      }
-
-      if (!response.ok) {
-        let errorMessage = `Server error: ${response.status} ${response.statusText}`;
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.message || errorData.error || errorMessage;
-        } catch (e) {
-          // If response is not JSON, try to get text
-          try {
-            const errorText = await response.text();
-            if (errorText) {
-              errorMessage = errorText;
-            }
-          } catch (e2) {
-            // Use default error message
-          }
-        }
-        throw new Error(errorMessage);
-      }
-
-      const result = await response.json();
+      // API call removed
+      const result = { success: false, message: 'Backend API removed' };
       setSuccess('Manual lineage relation created successfully!');
       setTimeout(() => {
         onSuccess && onSuccess();
