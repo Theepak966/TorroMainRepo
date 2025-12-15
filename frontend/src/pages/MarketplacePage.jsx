@@ -66,7 +66,7 @@ const MarketplacePage = () => {
   const [tableData, setTableData] = useState(null);
   const [error, setError] = useState(null);
   
-  // Tag management states
+  
   const [columnTagDialogOpen, setColumnTagDialogOpen] = useState(false);
   const [tableTagDialogOpen, setTableTagDialogOpen] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState(null);
@@ -84,7 +84,7 @@ const MarketplacePage = () => {
   const [tagMenuAnchor, setTagMenuAnchor] = useState(null);
 
   const handleSearch = async () => {
-    // Check required fields for Parquet files
+    
     if (!catalog || !fileName) {
       setError('Please fill in Catalog and File Name');
         return;
@@ -95,7 +95,7 @@ const MarketplacePage = () => {
     setTableData(null);
 
     try {
-      // Fetch assets from backend
+      
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
       const response = await fetch(`${API_BASE_URL}/api/assets`);
       if (!response.ok) {
@@ -104,13 +104,13 @@ const MarketplacePage = () => {
       
       const allAssets = await response.json();
       
-      // Find matching parquet file - flexible matching
+      
       const parquetAssets = allAssets.filter(asset => asset.connector_id?.startsWith('parquet_test_'));
       
       let matchingAsset = null;
       
       if (catalog && fileName) {
-        // Try exact match first (catalog + filename)
+        
         matchingAsset = parquetAssets.find(asset => {
           const catalogMatch = asset.catalog?.toLowerCase() === catalog.toLowerCase();
           const fileNameLower = fileName.toLowerCase();
@@ -122,7 +122,7 @@ const MarketplacePage = () => {
           return catalogMatch && nameMatch;
         });
         
-        // If no exact catalog match, try fuzzy catalog matching
+        
         if (!matchingAsset) {
           matchingAsset = parquetAssets.find(asset => {
             const catalogMatch = asset.catalog?.toLowerCase().includes(catalog.toLowerCase()) ||
@@ -135,7 +135,7 @@ const MarketplacePage = () => {
           });
         }
       } else if (fileName) {
-        // If only file name provided, search all catalogs
+        
         const fileNameLower = fileName.toLowerCase();
         matchingAsset = parquetAssets.find(asset => {
           const assetNameLower = asset.name?.toLowerCase() || '';
@@ -145,7 +145,7 @@ const MarketplacePage = () => {
       }
 
       if (!matchingAsset) {
-        // Provide helpful error with suggestions
+        
         const parquetAssets = allAssets.filter(a => a.connector_id?.startsWith('parquet_test_'));
         const availableCatalogs = [...new Set(parquetAssets.map(a => a.catalog))];
         const availableFiles = parquetAssets.map(a => `${a.catalog}/${a.name}`);
@@ -162,7 +162,7 @@ const MarketplacePage = () => {
         return;
       }
 
-      // Transform asset data to table data format
+      
       const columns = (matchingAsset.columns || []).map(col => ({
         name: col.name,
         type: col.type || 'string',
@@ -174,7 +174,7 @@ const MarketplacePage = () => {
       }));
 
       setTableData({
-        id: matchingAsset.id, // Store asset ID for updates
+        id: matchingAsset.id, 
         name: matchingAsset.name,
         type: matchingAsset.type,
         catalog: matchingAsset.catalog,
@@ -188,14 +188,14 @@ const MarketplacePage = () => {
       setLoading(false);
     } catch (err) {
       if (import.meta.env.DEV) {
-        console.error('API call failed:', err.message);
+      console.error('API call failed:', err.message);
       }
       setError(`Failed to fetch parquet file details: ${err.message}`);
       setLoading(false);
     }
   };
 
-  // Tag management handlers
+  
   const handleAddColumnTag = (columnName = null) => {
     if (columnName && typeof columnName === 'string') {
       setSelectedColumnForTag(columnName);
@@ -213,16 +213,16 @@ const MarketplacePage = () => {
     if (!newTag.trim() || !tableData) return;
 
     try {
-    // Determine which dialog is open and handle accordingly
+    
       if (selectedColumnForTag) {
-      // Add tag to specific column
+      
       const updatedColumns = tableData.columns.map(col => 
         col.name === selectedColumnForTag 
           ? { ...col, tags: [...(col.tags || []), newTag.trim()] }
           : col
       );
         
-        // Update backend
+        
         const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
         const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
           method: 'PUT',
@@ -240,11 +240,11 @@ const MarketplacePage = () => {
         }
       setColumnTagDialogOpen(false);
     } else {
-        // Add tag as table-level tag (business_metadata.tags)
+        
       const tableTags = tableData.tableTags || [];
         const updatedTableTags = [...tableTags, newTag.trim()];
         
-        // Update backend
+        
         const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
         const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
           method: 'PUT',
@@ -291,7 +291,7 @@ const MarketplacePage = () => {
 
     setPublishing(true);
     try {
-      // Check if archive tag already exists
+      
       const currentTags = tableData.tableTags || [];
       if (currentTags.includes('archive')) {
         setSnackbarMessage('Archive tag already exists');
@@ -300,11 +300,12 @@ const MarketplacePage = () => {
         return;
       }
 
-      // Add "archive" tag to table tags
+      
       const updatedTableTags = [...currentTags, 'archive'];
       
-      // Update the asset in backend with archive tag
-      const response = await fetch(`http://localhost:8099/api/assets/${tableData.id}`, {
+      
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
         method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -336,7 +337,7 @@ const MarketplacePage = () => {
       setSnackbarMessage(`Error applying archive tag: ${err.message}`);
       setSnackbarOpen(true);
       if (import.meta.env.DEV) {
-        console.error('Error publishing archive tag:', err);
+      console.error('Error publishing archive tag:', err);
       }
     } finally {
       setPublishing(false);
@@ -347,14 +348,15 @@ const MarketplacePage = () => {
     if (!tableData || !tableData.id) return;
 
     setPublishing(true);
-    setSqlDialogOpen(false); // Close dialog if open
+    setSqlDialogOpen(false); 
     
     try {
-      // Show loading for 4 seconds
+      
       await new Promise(resolve => setTimeout(resolve, 4000));
       
-      // Save all tags to backend
-      const response = await fetch(`http://localhost:8099/api/assets/${tableData.id}`, {
+      
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -370,7 +372,7 @@ const MarketplacePage = () => {
         throw new Error('Failed to save tags to backend');
       }
 
-      // Collect all column tags for the dialog
+      
       const columnTagsInfo = [];
       tableData.columns.forEach(col => {
         if (col.tags && col.tags.length > 0) {
@@ -381,14 +383,14 @@ const MarketplacePage = () => {
         }
       });
 
-      // Generate SQL commands for masked views
+      
       const piiColumns = tableData.columns.filter(col => col.piiFound);
       const tableName = tableData.name.replace('.parquet', '');
       const fullTableName = `${tableData.catalog}.${tableName}`;
       
       let sqlCommands = [];
       if (piiColumns.length > 0) {
-        // Analytical view
+        
         const analyticalSelects = tableData.columns.map(col => {
           if (col.piiFound) {
             return `    '***MASKED***' AS ${col.name}`;
@@ -397,7 +399,7 @@ const MarketplacePage = () => {
         });
         const analyticalSQL = `CREATE OR REPLACE VIEW ${fullTableName}_masked_analytical AS\nSELECT\n${analyticalSelects.join(',\n')}\nFROM ${fullTableName};`;
         
-        // Operational view
+        
         const operationalSelects = tableData.columns.map(col => {
           if (col.piiFound && col.piiType !== 'Email') {
             return `    '***MASKED***' AS ${col.name}`;
@@ -409,7 +411,7 @@ const MarketplacePage = () => {
         sqlCommands = [analyticalSQL, operationalSQL];
       }
 
-      // Set the dialog data
+      
         setBillingInfo({
           requiresBilling: false,
         message: 'Operation successful',
@@ -439,8 +441,9 @@ const MarketplacePage = () => {
           : col
       );
       
-      // Update backend
-      const response = await fetch(`http://localhost:8099/api/assets/${tableData.id}`, {
+      
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -469,54 +472,54 @@ const MarketplacePage = () => {
       return;
     }
     
-    // Generate recommended security tags with sensitivity levels (1-5) for PII columns
+    
     const recommendations = {};
     tableData.columns.forEach(col => {
       if (col.piiFound) {
         const name = col.name.toLowerCase();
         const tags = ['PII', 'SENSITIVE', 'DATA_PRIVACY'];
-        let sensitivityLevel = 3; // Default medium sensitivity
+        let sensitivityLevel = 3; 
         
-        // Determine sensitivity level and specific tags based on PII type
+        
         if (name.includes('ssn') || name.includes('social') || name.includes('social_security')) {
-          sensitivityLevel = 5; // Highest sensitivity
+          sensitivityLevel = 5; 
           tags.push('SSN', 'CRITICAL_PII', 'ENCRYPT_AT_REST', 'ENCRYPT_IN_TRANSIT');
         } else if (name.includes('credit') || name.includes('card') || name.includes('payment')) {
-          sensitivityLevel = 5; // Highest sensitivity
+          sensitivityLevel = 5; 
           tags.push('FINANCIAL', 'PAYMENT_INFO', 'PCI_DSS', 'ENCRYPT_AT_REST', 'ENCRYPT_IN_TRANSIT');
         } else if (name.includes('password') || name.includes('secret') || name.includes('token')) {
-          sensitivityLevel = 5; // Highest sensitivity
+          sensitivityLevel = 5; 
           tags.push('CREDENTIALS', 'AUTH_TOKEN', 'HASH_AT_REST', 'NEVER_LOG');
         } else if (name.includes('bank') || name.includes('routing') || name.includes('account')) {
-          sensitivityLevel = 5; // Highest sensitivity
+          sensitivityLevel = 5; 
           tags.push('BANKING_INFO', 'FINANCIAL', 'ENCRYPT_AT_REST');
         } else if (name.includes('date') && (name.includes('birth') || name.includes('dob'))) {
-          sensitivityLevel = 4; // High sensitivity
+          sensitivityLevel = 4; 
           tags.push('DATE_OF_BIRTH', 'PERSONAL_INFO', 'ENCRYPT_AT_REST');
         } else if (name.includes('address') || name.includes('street') || name.includes('zipcode') || name.includes('postal')) {
-          sensitivityLevel = 4; // High sensitivity
+          sensitivityLevel = 4; 
           tags.push('ADDRESS', 'LOCATION', 'PERSONAL_INFO', 'ENCRYPT_AT_REST');
         } else if (name.includes('passport') || name.includes('license') || name.includes('national_id')) {
-          sensitivityLevel = 5; // Highest sensitivity
+          sensitivityLevel = 5; 
           tags.push('GOVERNMENT_ID', 'CRITICAL_PII', 'ENCRYPT_AT_REST', 'ENCRYPT_IN_TRANSIT');
         } else if (name.includes('email') || name.includes('e_mail')) {
-          sensitivityLevel = 3; // Medium-high sensitivity
+          sensitivityLevel = 3; 
           tags.push('EMAIL', 'PERSONAL_INFO', 'MASK_IN_LOGS');
         } else if (name.includes('phone') || name.includes('mobile') || name.includes('cell')) {
-          sensitivityLevel = 3; // Medium-high sensitivity
+          sensitivityLevel = 3; 
           tags.push('PHONE', 'PERSONAL_INFO', 'MASK_IN_LOGS');
         } else if (name.includes('name') && (name.includes('first') || name.includes('last') || name.includes('full'))) {
-          sensitivityLevel = 2; // Medium sensitivity
+          sensitivityLevel = 2; 
           tags.push('NAME', 'PERSONAL_INFO', 'MASK_IN_LOGS');
         } else if (name.includes('id') && (name.includes('user') || name.includes('customer') || name.includes('person'))) {
-          sensitivityLevel = 2; // Medium sensitivity
+          sensitivityLevel = 2; 
           tags.push('IDENTIFIER', 'PERSONAL_INFO');
         } else {
-          sensitivityLevel = 2; // Medium sensitivity for general PII
+          sensitivityLevel = 2; 
           tags.push('GENERAL_PII');
         }
         
-        // Add ONE PII sensitivity level tag
+        
         tags.push(`PII_SENSITIVITY_LEVEL_${sensitivityLevel}`);
         
         recommendations[col.name] = {
@@ -531,7 +534,7 @@ const MarketplacePage = () => {
   };
 
   const handleApplyRecommendedTag = (columnName, tag) => {
-    // Update the column with the tag
+    
     const updatedColumns = tableData.columns.map(col => 
       col.name === columnName 
         ? { ...col, tags: [...new Set([...(col.tags || []), tag])] }
@@ -539,7 +542,7 @@ const MarketplacePage = () => {
     );
     setTableData({ ...tableData, columns: updatedColumns });
     
-    // Remove the tag from recommendations
+    
     const updatedRecs = { ...recommendedTags };
     if (updatedRecs[columnName] && updatedRecs[columnName].tags) {
       const rec = updatedRecs[columnName];
@@ -555,7 +558,7 @@ const MarketplacePage = () => {
   };
 
   const handleApplyAllRecommendedTags = () => {
-    // Apply all recommended tags
+    
     const updatedColumns = tableData.columns.map(col => {
       const rec = recommendedTags[col.name];
       const recommendations = rec ? rec.tags : [];
@@ -636,7 +639,7 @@ const MarketplacePage = () => {
         borderRadius: 2
       }}>
         <CardContent sx={{ p: 4 }}>
-          {/* Header */}
+          {}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 4 }}>
           <Typography 
             variant="h4" 
@@ -678,7 +681,7 @@ const MarketplacePage = () => {
             </Tooltip>
           </Box>
 
-          {/* Resource Type Selection */}
+          {}
           <FormControl component="fieldset" sx={{ mb: 4 }}>
             <FormLabel 
               component="legend" 
@@ -711,8 +714,7 @@ const MarketplacePage = () => {
             </RadioGroup>
           </FormControl>
 
-
-          {/* Data Asset Details */}
+          {}
           <Grid container spacing={3} sx={{ mb: 4 }}>
             {resourceType === 'Parquet Files' && (
               <>
@@ -804,7 +806,7 @@ const MarketplacePage = () => {
             )}
           </Grid>
 
-          {/* Action Buttons */}
+          {}
           <Box sx={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
@@ -835,14 +837,14 @@ const MarketplacePage = () => {
             </Button>
           </Box>
 
-          {/* Error Message */}
+          {}
           {error && (
             <Alert severity="error" sx={{ mt: 2 }}>
               {error}
             </Alert>
           )}
 
-          {/* Table Results */}
+          {}
           {tableData && (
             <Box sx={{ mt: 4 }}>
               <Box sx={{ mb: 2 }}>
@@ -957,7 +959,7 @@ const MarketplacePage = () => {
                 </Box>
                 </Box>
                 
-                {/* Table-Level Tags Display */}
+                {}
 
                 {(tableData.tableTags && tableData.tableTags.length > 0) && (
                   <Box sx={{ mb: 2, display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -973,7 +975,7 @@ const MarketplacePage = () => {
                           try {
                           const updatedTableTags = tableData.tableTags.filter((_, i) => i !== idx);
                             
-                            // Update backend
+                            
                             const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
         const response = await fetch(`${API_BASE_URL}/api/assets/${tableData.id}`, {
                               method: 'PUT',
@@ -1162,7 +1164,7 @@ const MarketplacePage = () => {
             </Box>
           )}
 
-          {/* Column Tag Dialog */}
+          {}
           <Dialog open={columnTagDialogOpen} onClose={handleCloseDialogs} maxWidth="sm" fullWidth>
             <DialogTitle>
               {selectedColumnForTag && selectedColumnForTag !== '' ? `Add Tag to Column: ${selectedColumnForTag}` : 'Add Tag to Column'}
@@ -1216,7 +1218,7 @@ const MarketplacePage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* Table Tag Dialog */}
+          {}
           <Dialog open={tableTagDialogOpen} onClose={handleCloseDialogs} maxWidth="sm" fullWidth>
             <DialogTitle>Add Tag to Table</DialogTitle>
             <DialogContent>
@@ -1257,7 +1259,7 @@ const MarketplacePage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* Recommended Tags Dialog */}
+          {}
           <Dialog open={recommendedTagsDialogOpen} onClose={handleCloseDialogs} maxWidth="md" fullWidth>
             <DialogTitle>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1371,7 +1373,7 @@ const MarketplacePage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* PII Status Change Dialog */}
+          {}
           <Dialog open={piiDialogOpen} onClose={handleCloseDialogs} maxWidth="sm" fullWidth>
             <DialogTitle>
               Change PII Status for Column: {selectedColumnForPii?.name}
@@ -1432,7 +1434,7 @@ const MarketplacePage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* Success Dialog */}
+          {}
           <Dialog open={sqlDialogOpen} onClose={() => setSqlDialogOpen(false)} maxWidth="md" fullWidth>
             <DialogTitle>
               Operation Successful
@@ -1444,7 +1446,7 @@ const MarketplacePage = () => {
                     Operation Successful
                   </Typography>
                   
-                  {/* Column Tags Information */}
+                  {}
                   {billingInfo.columnTagsInfo && billingInfo.columnTagsInfo.length > 0 && (
                     <Box sx={{ mb: 3 }}>
                       <Typography variant="body2" sx={{ fontWeight: 600, mb: 2, fontSize: '1rem' }}>
@@ -1487,7 +1489,7 @@ const MarketplacePage = () => {
                     </Box>
                   )}
 
-                  {/* Table Tags Information */}
+                  {}
                   {tableData && tableData.tableTags && tableData.tableTags.length > 0 && (
                     <Box sx={{ mb: 3 }}>
                         <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
@@ -1510,7 +1512,7 @@ const MarketplacePage = () => {
                         </Box>
                   )}
 
-                  {/* Views Created Message */}
+                  {}
                   {billingInfo.sqlCommands && billingInfo.sqlCommands.length > 0 && (
                     <Box sx={{ mb: 2 }}>
                       <Typography variant="body2" sx={{ fontWeight: 600, color: '#2e7d32' }}>
@@ -1520,8 +1522,7 @@ const MarketplacePage = () => {
                 )}
                 </Alert>
 
-
-                {/* Show SQL commands if available */}
+                {}
                 {billingInfo.sqlCommands && Array.isArray(billingInfo.sqlCommands) && billingInfo.sqlCommands.length > 0 && (
                   <Box sx={{ mt: 3 }}>
                     <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
@@ -1569,7 +1570,7 @@ const MarketplacePage = () => {
             </DialogActions>
           </Dialog>
 
-          {/* Snackbar for notifications */}
+          {}
           <Snackbar
             open={snackbarOpen}
             autoHideDuration={3000}

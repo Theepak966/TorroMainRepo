@@ -8,27 +8,26 @@ import logging
 from logging.handlers import RotatingFileHandler
 from functools import wraps
 
-# Initialize Flask app
 app = Flask(__name__)
 
-# Load configuration
 env = os.getenv("FLASK_ENV", "development")
 app.config.from_object(config.get(env, config["default"]))
 
-# Configure CORS
-CORS(
-    app,
-    resources={
-        r"/api/*": {
-            "origins": app.config["ALLOWED_ORIGINS"],
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"],
-            "supports_credentials": True
+if app.config["ALLOWED_ORIGINS"] == ["*"]:
+    CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"], "supports_credentials": True}})
+else:
+    CORS(
+        app,
+        resources={
+            r"/api/*": {
+                "origins": app.config["ALLOWED_ORIGINS"],
+                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                "allow_headers": ["Content-Type", "Authorization"],
+                "supports_credentials": True
+            }
         }
-    }
-)
+    )
 
-# Setup logging
 logging.basicConfig(
     level=getattr(logging, app.config["LOG_LEVEL"]),
     format='%(asctime)s %(name)s %(levelname)s %(message)s',
@@ -43,7 +42,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create tables
 try:
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables initialized successfully")
@@ -52,7 +50,7 @@ except Exception as e:
     raise
 
 def handle_error(f):
-    """Decorator to handle errors and sanitize error messages"""
+    
     @wraps(f)
     def decorated_function(*args, **kwargs):
         try:
@@ -67,7 +65,7 @@ def handle_error(f):
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
+    
     return jsonify({
         "status": "ok",
         "message": "Backend is running",
@@ -77,7 +75,7 @@ def health():
 @app.route('/api/connections', methods=['GET'])
 @handle_error
 def get_connections():
-    """Get all connections"""
+    
     db = SessionLocal()
     try:
         connections = db.query(Connection).all()
@@ -96,22 +94,22 @@ def get_connections():
 @app.route('/api/connections', methods=['POST'])
 @handle_error
 def create_connection():
-    """Create a new connection"""
+    
     db = SessionLocal()
     try:
         data = request.json
-        
+
         if not data:
             return jsonify({"error": "Request body is required"}), 400
         if not data.get('name'):
             return jsonify({"error": "Connection name is required"}), 400
         if not data.get('connector_type'):
             return jsonify({"error": "Connector type is required"}), 400
-        
+
         existing = db.query(Connection).filter(Connection.name == data['name']).first()
         if existing:
             return jsonify({"error": "Connection with this name already exists"}), 409
-        
+
         connection = Connection(
             name=data['name'],
             connector_type=data['connector_type'],
@@ -122,9 +120,9 @@ def create_connection():
         db.add(connection)
         db.commit()
         db.refresh(connection)
-        
+
         logger.info(f"Created connection: {connection.name} (ID: {connection.id})")
-        
+
         return jsonify({
             "id": connection.id,
             "name": connection.name,
@@ -147,26 +145,26 @@ def create_connection():
 @app.route('/api/connections/<int:connection_id>', methods=['DELETE'])
 @handle_error
 def delete_connection(connection_id):
-    """Delete a connection and its associated assets"""
+    
     db = SessionLocal()
     try:
         connection = db.query(Connection).filter(Connection.id == connection_id).first()
         if not connection:
             return jsonify({"error": "Connection not found"}), 404
-        
+
         connector_id_pattern = f"parquet_test_{connection.name}"
         associated_assets = db.query(Asset).filter(Asset.connector_id == connector_id_pattern).all()
-        
+
         for asset in associated_assets:
             db.delete(asset)
-        
+
         connection_name = connection.name
         db.delete(connection)
         db.commit()
-        
+
         deleted_count = len(associated_assets)
         logger.info(f"Deleted connection: {connection_name} (ID: {connection_id}) and {deleted_count} associated assets")
-        
+
         return jsonify({
             "message": "Connection deleted successfully",
             "deleted_assets": deleted_count
@@ -184,7 +182,7 @@ def delete_connection(connection_id):
 @app.route('/api/assets', methods=['GET'])
 @handle_error
 def get_assets():
-    """Get all assets"""
+    
     db = SessionLocal()
     try:
         assets = db.query(Asset).all()
@@ -206,17 +204,17 @@ def get_assets():
 @app.route('/api/assets', methods=['POST'])
 @handle_error
 def create_assets():
-    """Create new assets"""
+    
     db = SessionLocal()
     try:
         data = request.json
-        
+
         if not data:
             return jsonify({"error": "Request body is required"}), 400
-        
+
         assets_data = data if isinstance(data, list) else [data]
         created_assets = []
-        
+
         for asset_data in assets_data:
             if not asset_data.get('id'):
                 return jsonify({"error": "Asset ID is required"}), 400
@@ -224,7 +222,7 @@ def create_assets():
                 return jsonify({"error": "Asset name is required"}), 400
             if not asset_data.get('type'):
                 return jsonify({"error": "Asset type is required"}), 400
-            
+
             asset = Asset(
                 id=asset_data['id'],
                 name=asset_data['name'],
@@ -238,13 +236,13 @@ def create_assets():
             )
             db.add(asset)
             created_assets.append(asset)
-        
+
         db.commit()
         for asset in created_assets:
             db.refresh(asset)
-        
+
         logger.info(f"Created {len(created_assets)} asset(s)")
-        
+
         return jsonify([{
             "id": asset.id,
             "name": asset.name,
@@ -270,17 +268,17 @@ def create_assets():
 @app.route('/api/assets/<asset_id>', methods=['PUT'])
 @handle_error
 def update_asset(asset_id):
-    """Update an asset"""
+    
     db = SessionLocal()
     try:
         asset = db.query(Asset).filter(Asset.id == asset_id).first()
         if not asset:
             return jsonify({"error": "Asset not found"}), 404
-        
+
         data = request.json
         if not data:
             return jsonify({"error": "Request body is required"}), 400
-        
+
         if 'business_metadata' in data:
             asset.business_metadata = data['business_metadata']
         if 'technical_metadata' in data:
@@ -289,12 +287,12 @@ def update_asset(asset_id):
             asset.operational_metadata = data['operational_metadata']
         if 'columns' in data:
             asset.columns = data['columns']
-        
+
         db.commit()
         db.refresh(asset)
-        
+
         logger.info(f"Updated asset: {asset_id}")
-        
+
         return jsonify({
             "id": asset.id,
             "name": asset.name,
@@ -319,12 +317,12 @@ def update_asset(asset_id):
 
 @app.errorhandler(404)
 def not_found(error):
-    """Handle 404 errors"""
+    
     return jsonify({"error": "Resource not found"}), 404
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle 500 errors"""
+    
     logger.error(f"Internal server error: {str(error)}", exc_info=True)
     if app.config.get("DEBUG"):
         return jsonify({"error": str(error)}), 500

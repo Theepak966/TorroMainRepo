@@ -42,7 +42,7 @@ const Header = ({ onMenuClick }) => {
           <Menu />
         </IconButton>
         
-        {/* Logo and Title */}
+        {}
         <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 2 }}>
           <img 
             src="/torro-logo.svg" 

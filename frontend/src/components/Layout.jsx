@@ -4,7 +4,6 @@ import {
   Box,
 } from '@mui/material';
 
-// Components
 import Header from './Header';
 import Sidebar from './Sidebar';
 

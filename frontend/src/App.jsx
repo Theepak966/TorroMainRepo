@@ -3,16 +3,13 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
-// Components
 import Layout from './components/Layout';
 
-// Pages
 import AssetsPage from './pages/AssetsPage';
 import MarketplacePage from './pages/MarketplacePage';
 import DataLineagePage from './pages/DataLineagePage';
 import ConnectorsPage from './pages/ConnectorsPage';
 
-// Theme
 const theme = createTheme({
   palette: {
     primary: {

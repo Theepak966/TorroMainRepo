@@ -76,7 +76,6 @@ import {
 } from '@mui/icons-material';
 import ManualLineageDialog from '../components/ManualLineageDialog';
 
-// Custom node component for better styling
 const CustomNode = ({ data }) => {
   const isSelected = data.isSelected;
   const isPipelineNode = data.isPipelineNode || false;
@@ -167,26 +166,25 @@ const nodeTypes = {
   custom: CustomNode,
 };
 
-// PII Detection Function
 const detectPII = (columnName, description) => {
   const piiPatterns = [
-    // Email patterns
+    
     /email/i, /e-mail/i, /mail/i,
-    // Phone patterns
+    
     /phone/i, /mobile/i, /cell/i, /telephone/i,
-    // Name patterns
+    
     /firstname/i, /lastname/i, /fullname/i, /name/i,
-    // Address patterns
+    
     /address/i, /street/i, /city/i, /zip/i, /postal/i,
-    // ID patterns
+    
     /ssn/i, /social/i, /passport/i, /license/i, /id/i,
-    // Financial patterns
+    
     /credit/i, /card/i, /account/i, /bank/i,
-    // Personal patterns
+    
     /birth/i, /age/i, /gender/i, /race/i, /ethnicity/i,
-    // Location patterns
+    
     /location/i, /gps/i, /coordinate/i, /lat/i, /lng/i,
-    // Other sensitive patterns
+    
     /password/i, /secret/i, /private/i, /confidential/i
   ];
   
@@ -226,7 +224,7 @@ const DataLineagePage = () => {
       if (response.ok) {
         const assets = await response.json();
         
-        // Convert assets to lineage nodes with columns
+        
         const lineageNodes = assets.map(asset => ({
           id: asset.id,
           name: asset.name,
@@ -236,7 +234,7 @@ const DataLineagePage = () => {
           columns: asset.columns || [],
         }));
         
-        // Create edges with column lineage based on common columns
+        
         const edges = [];
         const catalogMap = new Map();
         lineageNodes.forEach(node => {
@@ -248,18 +246,18 @@ const DataLineagePage = () => {
           }
         });
         
-        // Create edges between nodes in the same catalog with column lineage
+        
         catalogMap.forEach((nodes, catalog) => {
           for (let i = 0; i < nodes.length - 1; i++) {
             const sourceNode = nodes[i];
             const targetNode = nodes[i + 1];
             
-            // Find common columns between source and target
+            
             const sourceColumns = sourceNode.columns || [];
             const targetColumns = targetNode.columns || [];
             const columnLineage = [];
             
-            // Match columns by name (handle both object and string formats)
+            
             sourceColumns.forEach(srcCol => {
               const srcColName = typeof srcCol === 'string' ? srcCol : (srcCol.name || srcCol.column_name || '');
               if (!srcColName) return;
@@ -307,7 +305,7 @@ const DataLineagePage = () => {
         
         setFullLineageData(lineageData);
         
-        // Don't show nodes/edges by default - wait for asset selection
+        
         setNodes([]);
         setEdges([]);
       } else {
@@ -348,10 +346,9 @@ const DataLineagePage = () => {
     fetchAssets();
   }, []);
 
-
-  // Automatic hierarchical layout algorithm
+  
   const layoutNodes = (nodes, edges) => {
-    // Create adjacency map for graph traversal
+    
     const adjacencyMap = new Map();
     nodes.forEach(node => adjacencyMap.set(node.id, { node, children: [], parents: [] }));
     
@@ -364,16 +361,16 @@ const DataLineagePage = () => {
       }
     });
 
-    // Find root nodes (nodes with no parents)
+    
     const rootNodes = nodes.filter(node => {
       const nodeData = adjacencyMap.get(node.id);
       return nodeData.parents.length === 0;
     });
 
-    // If no root nodes, use all nodes as potential roots
+    
     const startNodes = rootNodes.length > 0 ? rootNodes : nodes;
 
-    // BFS to assign levels
+    
     const levels = new Map();
     const visited = new Set();
     const queue = startNodes.map(node => ({ id: node.id, level: 0 }));
@@ -395,14 +392,14 @@ const DataLineagePage = () => {
       }
     }
 
-    // Handle nodes not reached by BFS
+    
     nodes.forEach(node => {
       if (!levels.has(node.id)) {
         levels.set(node.id, 0);
       }
     });
 
-    // Group nodes by level
+    
     const nodesByLevel = new Map();
     levels.forEach((level, nodeId) => {
       if (!nodesByLevel.has(level)) {
@@ -411,7 +408,7 @@ const DataLineagePage = () => {
       nodesByLevel.get(level).push(nodeId);
     });
 
-    // Calculate positions
+    
     const levelSpacing = 250;
     const nodeSpacing = 150;
     const layoutedNodes = [];
@@ -434,13 +431,13 @@ const DataLineagePage = () => {
     return layoutedNodes;
   };
 
-  // Handle node click for popup dialog
+  
   const handleNodeClick = async (nodeId) => {
     try {
-      // Reset column pagination when opening a new node
+      
       setColumnPage(0);
       
-      // Find asset in local assets array
+      
       const asset = assets.find(a => a.id === nodeId);
       
       const assetData = asset || { id: nodeId, name: nodeId, error: 'Asset details not found' };
@@ -450,7 +447,7 @@ const DataLineagePage = () => {
     } catch (error) {
       if (import.meta.env.DEV) {
         if (import.meta.env.DEV) {
-        console.error('Error fetching node details:', error);
+      console.error('Error fetching node details:', error);
       }
       }
       setSelectedNode({ id: nodeId, name: nodeId, error: error.message });
@@ -458,14 +455,14 @@ const DataLineagePage = () => {
     }
   };
 
-  // Handle dialog close
+  
   const handleCloseDialog = () => {
     setDetailsDialogOpen(false);
     setSelectedNode(null);
-    setColumnPage(0);  // Reset pagination when closing dialog
+    setColumnPage(0);  
   };
 
-  // Handle asset selection for details panel
+  
   const handleAssetDetailsSelection = async (assetId) => {
     if (!assetId) {
       setShowAssetDetails(false);
@@ -485,11 +482,10 @@ const DataLineagePage = () => {
       }
     } catch (error) {
       if (import.meta.env.DEV) {
-        console.error('Error fetching asset details:', error);
+      console.error('Error fetching asset details:', error);
       }
     }
   };
-
 
   const handleEdgeClick = (edgeData) => {
     setSelectedEdge(edgeData);
@@ -507,10 +503,10 @@ const DataLineagePage = () => {
     }
   };
 
-  // Filter lineage for selected asset
+  
   const handleAssetSelection = (assetId) => {
     if (!assetId) {
-      // Clear selection - show nothing
+      
       setSelectedAssetForLineage(null);
       setNodes([]);
       setEdges([]);
@@ -519,41 +515,41 @@ const DataLineagePage = () => {
 
     setSelectedAssetForLineage(assetId);
 
-    // Use rawData from API response
+    
     const rawNodes = fullLineageData.rawData.nodes;
     const rawEdges = fullLineageData.rawData.edges;
 
-    // Find related nodes (upstream + downstream + selected)
+    
     const relatedNodeIds = new Set([assetId]);
     
-    // Find upstream (sources feeding into selected asset)
+    
     const upstreamEdges = rawEdges.filter(e => e.target === assetId);
     upstreamEdges.forEach(edge => {
       relatedNodeIds.add(edge.source);
-      // Also add their sources (2 levels up)
+      
       const secondLevelUp = rawEdges.filter(e => e.target === edge.source);
       secondLevelUp.forEach(e2 => relatedNodeIds.add(e2.source));
     });
 
-    // Find downstream (assets depending on selected asset)
+    
     const downstreamEdges = rawEdges.filter(e => e.source === assetId);
     downstreamEdges.forEach(edge => {
       relatedNodeIds.add(edge.target);
-      // Also add their targets (2 levels down)
+      
       const secondLevelDown = rawEdges.filter(e => e.source === edge.target);
       secondLevelDown.forEach(e2 => relatedNodeIds.add(e2.target));
     });
 
-    // Filter nodes and edges
+    
     const filteredNodes = rawNodes.filter(n => relatedNodeIds.has(n.id));
     const filteredEdges = rawEdges.filter(e => 
       relatedNodeIds.has(e.source) && relatedNodeIds.has(e.target)
     );
 
-    // Re-layout the filtered graph
+    
     const layoutedNodes = layoutNodes(filteredNodes, filteredEdges);
     
-    // Re-apply pipeline detection for filtered nodes (same logic as main fetch)
+    
     const getPipelineStageForFiltered = (node) => {
       const nameLower = (node.name || '').toLowerCase();
       const catalogLower = (node.catalog || '').toLowerCase();
@@ -646,7 +642,7 @@ const DataLineagePage = () => {
       };
     });
 
-    // Helper to determine pipeline relationship type for filtered edges
+    
     const getPipelineRelationshipForFiltered = (edge) => {
       const relationship = (edge.relationship || '').toLowerCase();
       const sourceId = (edge.source || '').toLowerCase();
@@ -660,7 +656,7 @@ const DataLineagePage = () => {
         return { type: 'load', color: '#4caf50', label: 'LOAD' };
       }
       
-      // Check by node IDs for ETL pipeline patterns
+      
       if (sourceId.includes('sample:etl:') || targetId.includes('sample:etl:')) {
         if (sourceId.includes(':source:') && targetId.includes(':staging:')) {
           return { type: 'extract', color: '#ff9800', label: 'EXTRACT' };
@@ -673,13 +669,13 @@ const DataLineagePage = () => {
       return null;
     };
     
-    // Create flow edges with proper structure
+    
     const flowEdges = filteredEdges.map((edge, index) => {
       const columnCount = edge.column_lineage ? edge.column_lineage.length : 0;
       const pipelineRel = getPipelineRelationshipForFiltered(edge);
       const isPipelineEdge = pipelineRel !== null;
       
-      // Determine edge color based on pipeline stage or column lineage
+      
       let edgeColor = '#64b5f6';
       let edgeWidth = 1;
       if (isPipelineEdge) {
@@ -739,12 +735,11 @@ const DataLineagePage = () => {
       };
     });
 
-
     setNodes(flowNodes);
     setEdges(flowEdges);
   };
 
-  // Apply filters - only if an asset is selected
+  
   const filteredNodes = selectedAssetForLineage ? nodes.filter(node => {
     const matchesSearch = !searchTerm || 
       node.data.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -760,19 +755,19 @@ const DataLineagePage = () => {
     return sourceExists && targetExists;
   }) : [];
 
-  // Get unique types and sources for filters from full data
+  
   const uniqueTypes = [...new Set(fullLineageData.rawData?.nodes?.map(n => n.type) || [])];
   const uniqueSources = [...new Set(fullLineageData.rawData?.nodes?.map(n => n.source_system) || [])];
 
-  // Dropdown should show ALL assets (only filter by search term if provided)
-  // Type and Source filters only apply to the graph visualization, not the dropdown
+  
+  
   const dropdownAssets = fullLineageData.rawData?.nodes?.filter(node => {
     if (!searchTerm) return true;
     return node.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
            node.catalog.toLowerCase().includes(searchTerm.toLowerCase());
   }) || [];
 
-  // Create filtered data for graph visualization (applies ALL filters)
+  
   const filteredRawNodes = fullLineageData.rawData?.nodes?.filter(node => {
     const matchesSearch = !searchTerm || 
       node.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -784,7 +779,7 @@ const DataLineagePage = () => {
 
   return (
     <Box sx={{ minHeight: '120vh', p: 4, pb: 8 }}>
-      {/* Header */}
+      {}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h4" component="h1" sx={{ fontWeight: 600, fontFamily: 'Comfortaa', display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -818,7 +813,7 @@ const DataLineagePage = () => {
         </Box>
       </Box>
 
-      {/* Filters */}
+      {}
       <Card sx={{ mb: 3 }}>
         <CardContent sx={{ py: 2 }}>
           <Grid container spacing={2} alignItems="center">
@@ -941,7 +936,7 @@ const DataLineagePage = () => {
         </CardContent>
       </Card>
 
-      {/* Lineage Graph */}
+      {}
       <Card sx={{ position: 'relative', height: '700px', mb: 4 }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
@@ -1068,7 +1063,7 @@ const DataLineagePage = () => {
         )}
       </Card>
 
-      {/* Asset Details Header */}
+      {}
       {selectedAssetDetails && (
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, mt: 4 }}>
           <Typography variant="h5" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1092,7 +1087,7 @@ const DataLineagePage = () => {
         </Box>
       )}
 
-      {/* No Asset Selected State */}
+      {}
       {!selectedAssetDetails && (
         <Box sx={{ 
           display: 'flex', 
@@ -1113,7 +1108,7 @@ const DataLineagePage = () => {
                   </Box>
       )}
 
-      {/* Asset Details Tabs */}
+      {}
       {selectedAssetDetails && (
         <Card sx={{ mb: 4, minHeight: '400px' }}>
           <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
@@ -1171,7 +1166,7 @@ const DataLineagePage = () => {
                 </Box>
           
           <CardContent sx={{ p: 4, minHeight: '350px', overflow: 'auto' }}>
-            {/* Basic Information Tab */}
+            {}
             {activeDetailTab === 'basic' && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <Box>
@@ -1215,7 +1210,7 @@ const DataLineagePage = () => {
               </Box>
             )}
 
-            {/* Column Information Tab */}
+            {}
             {activeDetailTab === 'columns' && (
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
@@ -1235,7 +1230,7 @@ const DataLineagePage = () => {
                           </TableHead>
                           <TableBody>
                         {selectedAssetDetails.columns.map((col, index) => {
-                          // PII detection logic
+                          
                           const isPII = detectPII(col.name, col.description);
                           return (
                               <TableRow key={index}>
@@ -1313,7 +1308,7 @@ const DataLineagePage = () => {
               </Box>
             )}
 
-            {/* Lineage Information Tab */}
+            {}
             {activeDetailTab === 'lineage' && (
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
@@ -1386,14 +1381,14 @@ const DataLineagePage = () => {
               </Box>
             )}
 
-            {/* Metadata Tab */}
+            {}
             {activeDetailTab === 'metadata' && (
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 600, mb: 4, color: '#333' }}>
                   Metadata Information
                 </Typography>
                 
-                {/* Basic Information Cards */}
+                {}
                 <Grid container spacing={3} sx={{ mb: 4 }}>
                   <Grid item xs={12} md={6}>
                     <Box sx={{ p: 3, border: '1px solid #e0e0e0', borderRadius: 2, backgroundColor: '#fafafa' }}>
@@ -1467,7 +1462,7 @@ const DataLineagePage = () => {
                   </Grid>
                 </Grid>
 
-                {/* Technical Details */}
+                {}
                 <Box sx={{ mb: 4 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     Technical Details
@@ -1516,7 +1511,7 @@ const DataLineagePage = () => {
                   </Grid>
                 </Box>
 
-                {/* Data Governance */}
+                {}
                 <Box sx={{ mb: 4 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     Data Governance
@@ -1558,7 +1553,7 @@ const DataLineagePage = () => {
                   </Grid>
                 </Box>
 
-                {/* PII Analysis Summary */}
+                {}
                 <Box>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     PII Analysis Summary
@@ -1599,7 +1594,7 @@ const DataLineagePage = () => {
               </Box>
             )}
 
-            {/* Data Quality Tab */}
+            {}
             {activeDetailTab === 'quality' && (
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
@@ -1666,14 +1661,14 @@ const DataLineagePage = () => {
               </Box>
             )}
 
-            {/* Pipeline Summary Tab - Only for ETL/ELT Pipelines */}
+            {}
             {activeDetailTab === 'pipeline' && selectedAssetDetails?.pipeline_metadata?.is_pipeline_asset && (
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                   Pipeline Summary
                 </Typography>
                 
-                {/* Pipeline Overview */}
+                {}
                 <Box sx={{ mb: 4 }}>
                   <Card sx={{ bgcolor: '#f5f5f5', border: '2px solid #1976d2', borderRadius: 2 }}>
                     <CardContent>
@@ -1737,13 +1732,13 @@ const DataLineagePage = () => {
                   </Card>
                 </Box>
 
-                {/* Pipeline Stage Visualization */}
+                {}
                 <Box sx={{ mb: 4 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     Pipeline Flow
                   </Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, flexWrap: 'wrap', mb: 3 }}>
-                    {/* Extract Stage */}
+                    {}
                     <Box sx={{ 
                       p: 2, 
                       borderRadius: 2, 
@@ -1765,7 +1760,7 @@ const DataLineagePage = () => {
                     
                     <ArrowForward sx={{ color: '#999', fontSize: 32 }} />
                     
-                    {/* Transform Stage */}
+                    {}
                     <Box sx={{ 
                       p: 2, 
                       borderRadius: 2, 
@@ -1787,7 +1782,7 @@ const DataLineagePage = () => {
                     
                     <ArrowForward sx={{ color: '#999', fontSize: 32 }} />
                     
-                    {/* Load Stage */}
+                    {}
                     <Box sx={{ 
                       p: 2, 
                       borderRadius: 2, 
@@ -1809,7 +1804,7 @@ const DataLineagePage = () => {
                   </Box>
                 </Box>
 
-                {/* Upstream Assets */}
+                {}
                 {selectedAssetDetails.pipeline_metadata.upstream_assets && selectedAssetDetails.pipeline_metadata.upstream_assets.length > 0 && (
                   <Box sx={{ mb: 4 }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2, color: '#333' }}>
@@ -1840,7 +1835,7 @@ const DataLineagePage = () => {
                   </Box>
                 )}
 
-                {/* Downstream Assets */}
+                {}
                 {selectedAssetDetails.pipeline_metadata.downstream_assets && selectedAssetDetails.pipeline_metadata.downstream_assets.length > 0 && (
                   <Box sx={{ mb: 4 }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2, color: '#333' }}>
@@ -1871,7 +1866,7 @@ const DataLineagePage = () => {
                   </Box>
                 )}
 
-                {/* Pipeline Statistics */}
+                {}
                 <Box>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     Pipeline Statistics
@@ -1916,7 +1911,7 @@ const DataLineagePage = () => {
         </Card>
       )}
 
-      {/* Asset Details Popup Dialog */}
+      {}
       <Dialog
         open={detailsDialogOpen}
         onClose={handleCloseDialog}
@@ -2086,7 +2081,7 @@ const DataLineagePage = () => {
               <Button 
                 variant="contained" 
                 onClick={() => {
-                  // Backend removed - use local node data
+                  
                       setSelectedAssetDetails(selectedNode);
                       setActiveDetailTab('basic');
                       handleCloseDialog();
@@ -2099,7 +2094,7 @@ const DataLineagePage = () => {
         )}
       </Dialog>
 
-      {/* Edge Details Dialog - Column Lineage */}
+      {}
       <Dialog
         open={edgeDetailsOpen}
         onClose={handleCloseEdgeDialog}
@@ -2215,7 +2210,7 @@ const DataLineagePage = () => {
         )}
       </Dialog>
 
-      {/* Manual Lineage Dialog */}
+      {}
       <ManualLineageDialog
         open={manualLineageOpen}
         onClose={() => setManualLineageOpen(false)}

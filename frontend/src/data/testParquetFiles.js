@@ -1,4 +1,4 @@
-// Hardcoded test parquet files for each data type
+
 
 export const TEST_PARQUET_FILES = {
   sample: [

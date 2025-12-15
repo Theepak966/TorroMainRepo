@@ -4,7 +4,7 @@ from .database import Base
 
 class Asset(Base):
     __tablename__ = "assets"
-    
+
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     type = Column(String, nullable=False)
@@ -18,7 +18,7 @@ class Asset(Base):
 
 class Connection(Base):
     __tablename__ = "connections"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False, unique=True)
     connector_type = Column(String, nullable=False)

@@ -98,8 +98,7 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
         notes: notes || `Manual lineage entry created via UI`
       };
 
-
-      // API call removed
+      
       const result = { success: false, message: 'Backend API removed' };
       setSuccess('Manual lineage relation created successfully!');
       setTimeout(() => {
@@ -158,7 +157,8 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
         setLoading(false);
       });
 
-      xhr.open('POST', 'http://localhost:8099/api/lineage/curation/upload');
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      xhr.open('POST', `${API_BASE_URL}/api/lineage/curation/upload`);
       xhr.withCredentials = true;
       xhr.send(formData);
     } catch (err) {
@@ -420,7 +420,4 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
 };
 
 export default ManualLineageDialog;
-
-
-
 

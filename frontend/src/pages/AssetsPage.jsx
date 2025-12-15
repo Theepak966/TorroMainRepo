@@ -58,12 +58,12 @@ const AssetsPage = () => {
   const [originalSensitivityLevel, setOriginalSensitivityLevel] = useState('medium');
   const [savingMetadata, setSavingMetadata] = useState(false);
   
-  // Pagination state
+  
   const [currentPage, setCurrentPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [totalAssets, setTotalAssets] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
-  const [allAssets, setAllAssets] = useState([]); // For filters
+  const [allAssets, setAllAssets] = useState([]); 
 
   useEffect(() => {
     fetchAssets();
@@ -72,13 +72,14 @@ const AssetsPage = () => {
   const fetchAssets = async (pageOverride = null) => {
       setLoading(true);
     try {
-      const response = await fetch('http://localhost:8099/api/assets');
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+      const response = await fetch(`${API_BASE_URL}/api/assets`);
       if (response.ok) {
       const data = await response.json();
         setAllAssets(data);
         setTotalAssets(data.length);
         
-        // Apply filters if any
+        
         let filtered = data;
         if (searchTerm) {
           filtered = filtered.filter(asset => 
@@ -93,7 +94,7 @@ const AssetsPage = () => {
           filtered = filtered.filter(asset => asset.catalog === catalogFilter);
         }
         
-        // Pagination
+        
         const page = pageOverride !== null ? pageOverride : currentPage;
         const start = page * pageSize;
         const end = start + pageSize;
@@ -114,7 +115,7 @@ const AssetsPage = () => {
     }
   };
 
-  // Get unique types and catalogs for filter dropdowns
+  
   const uniqueTypes = [...new Set(allAssets.map(asset => asset.type))];
   const uniqueCatalogs = [...new Set(allAssets.map(asset => asset.catalog))];
 
@@ -130,7 +131,7 @@ const AssetsPage = () => {
   };
 
   const handleViewAsset = async (assetId) => {
-    // Fetch latest asset data from backend to ensure we have the most up-to-date tags
+    
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
       const response = await fetch(`${API_BASE_URL}/api/assets`);
@@ -138,7 +139,7 @@ const AssetsPage = () => {
         const allAssetsData = await response.json();
         const asset = allAssetsData.find(a => a.id === assetId);
         if (asset) {
-          // Update the allAssets state with latest data
+          
           setAllAssets(allAssetsData);
           setSelectedAsset(asset);
       setDetailsDialogOpen(true);
@@ -148,7 +149,7 @@ const AssetsPage = () => {
           setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
         }
       } else {
-        // Fallback to cached data if fetch fails
+        
         const asset = allAssets.find(a => a.id === assetId);
         if (asset) {
           setSelectedAsset(asset);
@@ -160,11 +161,11 @@ const AssetsPage = () => {
         }
       }
     } catch (error) {
-      // Log error in development only
+      
       if (import.meta.env.DEV) {
         console.error('Error fetching asset:', error);
       }
-      // Fallback to cached data if fetch fails
+      
       const asset = allAssets.find(a => a.id === assetId);
       if (asset) {
         setSelectedAsset(asset);
@@ -208,7 +209,7 @@ const AssetsPage = () => {
 
       if (response.ok) {
         const updatedAsset = await response.json();
-        // Update in local state
+        
         setAllAssets(prev => prev.map(a => a.id === updatedAsset.id ? updatedAsset : a));
         setSelectedAsset(updatedAsset);
         setOriginalClassification(classification);
@@ -218,9 +219,9 @@ const AssetsPage = () => {
         throw new Error('Failed to save metadata');
       }
     } catch (error) {
-      // Log error in development only
+      
       if (import.meta.env.DEV) {
-        console.error('Error saving metadata:', error);
+      console.error('Error saving metadata:', error);
       }
       alert('Failed to save metadata. Please try again.');
     } finally {
@@ -232,31 +233,31 @@ const AssetsPage = () => {
     setActiveTab(newValue);
   };
 
-  // Pagination handlers
+  
   const handlePageChange = (event, page) => {
-    setCurrentPage(page - 1); // Convert to 0-based
+    setCurrentPage(page - 1); 
   };
 
   const handlePageSizeChange = (event) => {
     const newSize = parseInt(event.target.value, 10);
     setPageSize(newSize);
-    setCurrentPage(0); // Reset to first page
+    setCurrentPage(0); 
   };
 
-  // Search and filter handlers
+  
   const handleSearchChange = (event) => {
     setSearchTerm(event.target.value);
-    setCurrentPage(0); // Reset to first page
+    setCurrentPage(0); 
   };
 
   const handleTypeFilterChange = (event) => {
     setTypeFilter(event.target.value);
-    setCurrentPage(0); // Reset to first page
+    setCurrentPage(0); 
   };
 
   const handleCatalogFilterChange = (event) => {
     setCatalogFilter(event.target.value);
-    setCurrentPage(0); // Reset to first page
+    setCurrentPage(0); 
   };
 
   const formatBytes = (bytes) => {
@@ -434,7 +435,7 @@ const AssetsPage = () => {
             </Table>
           </TableContainer>
           
-          {/* Pagination Controls */}
+          {}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3, px: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <Typography variant="body2" color="text.secondary">
@@ -469,7 +470,7 @@ const AssetsPage = () => {
         </CardContent>
       </Card>
 
-      {/* Asset Details Dialog */}
+      {}
       <Dialog
         open={detailsDialogOpen}
         onClose={handleCloseDialog}
@@ -507,14 +508,14 @@ const AssetsPage = () => {
                 <Tab label="Columns & PII" />
               </Tabs>
 
-              {/* Technical Metadata Tab */}
+              {}
               {activeTab === 0 && (
                 <Box>
                   <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
                     Technical Metadata
                   </Typography>
                   {(() => {
-                    // Defensive programming: ensure technical_metadata exists and has all required fields
+                    
                     const technicalMetadata = selectedAsset?.technical_metadata || {};
                     const safeAssetId = technicalMetadata.asset_id || selectedAsset?.id || 'N/A';
                     const safeAssetType = technicalMetadata.asset_type || selectedAsset?.type || 'Unknown';
@@ -626,7 +627,7 @@ const AssetsPage = () => {
                                   </CardContent>
                                 </Card>
                               </Grid>
-                            )}
+                        )}
                         <Grid item xs={12}>
                           <Card variant="outlined">
                             <CardContent>
@@ -645,14 +646,14 @@ const AssetsPage = () => {
                 </Box>
               )}
 
-              {/* Operational Metadata Tab */}
+              {}
               {activeTab === 1 && (
                 <Box>
                   <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
                     Operational Metadata
                   </Typography>
                   {(() => {
-                    // Defensive programming: ensure operational_metadata exists and has all required fields
+                    
                     const operationalMetadata = selectedAsset?.operational_metadata || {};
                     const safeStatus = operationalMetadata.status || 'active';
                     const safeOwner = typeof operationalMetadata.owner === 'object' && operationalMetadata.owner?.roleName 
@@ -745,14 +746,14 @@ const AssetsPage = () => {
                 </Box>
               )}
 
-              {/* Business Metadata Tab */}
+              {}
               {activeTab === 2 && (
                 <Box>
                   <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
                     Business Metadata
                   </Typography>
                   {(() => {
-                    // Defensive programming: ensure business_metadata exists and has all required fields
+                    
                     const businessMetadata = selectedAsset?.business_metadata || {};
                     const safeDescription = businessMetadata.description || selectedAsset?.description || 'No description available';
                     const safeBusinessOwner = businessMetadata.business_owner || 'Unknown';
@@ -881,7 +882,7 @@ const AssetsPage = () => {
                               </Typography>
                               <Box sx={{ mt: 1 }}>
                                 {selectedAsset?.columns && selectedAsset.columns.length > 0 ? (() => {
-                                  // Collect all tags from all columns
+                                  
                                   const allColumnTags = [];
                                   selectedAsset.columns.forEach(column => {
                                     const columnTags = column.tags || [];
@@ -932,14 +933,14 @@ const AssetsPage = () => {
                 </Box>
               )}
 
-              {/* Columns & PII Tab */}
+              {}
               {activeTab === 3 && (
                 <Box>
                   <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
                     Columns & PII Detection
                   </Typography>
                   {(() => {
-                    // Defensive programming: ensure columns exist and handle missing data
+                    
                     const columns = selectedAsset?.columns || [];
                     const piiColumns = columns.filter(col => col.pii_detected);
                     
@@ -1017,7 +1018,7 @@ const AssetsPage = () => {
               )}
             </DialogContent>
             <DialogActions>
-              {/* Show Cancel and Save Changes only when Business Metadata tab is active OR values have changed */}
+              {}
               {(activeTab === 2 || classification !== originalClassification || sensitivityLevel !== originalSensitivityLevel) && (
                 <>
                   <Button 
@@ -1045,7 +1046,6 @@ const AssetsPage = () => {
           </>
         )}
       </Dialog>
-
 
     </Box>
   );
