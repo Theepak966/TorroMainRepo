@@ -28,8 +28,12 @@ else:
 if os.getenv("DATABASE_URL"):
     DATABASE_URL = os.getenv("DATABASE_URL")
 
-POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
-MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+# Connection pool configuration for production (20-30 concurrent users)
+# pool_size: Base connections always available (75 = ~3 per user for 25 users)
+# max_overflow: Additional connections during peak load (75 = total max 150)
+# This handles 20-30 concurrent users with 2-3 requests per user
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "75"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "75"))
 POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
 
 engine = create_engine(
