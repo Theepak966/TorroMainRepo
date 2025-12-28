@@ -547,31 +547,77 @@ const AssetsPage = () => {
             startIcon={<Refresh />}
             onClick={async () => {
               try {
+                setLoading(true);
                 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                // Trigger Airflow DAG first
-                const triggerResponse = await fetch(`${API_BASE_URL}/api/discovery/trigger`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({})
-                });
                 
-                if (triggerResponse.ok) {
-                  const triggerData = await triggerResponse.json();
-                  if (import.meta.env.DEV) {
-                    console.log('Airflow DAG triggered:', triggerData);
-                  }
-                } else {
-                  console.warn('Failed to trigger Airflow DAG, refreshing assets anyway');
+                // First, get all connections
+                const connectionsResponse = await fetch(`${API_BASE_URL}/api/connections`);
+                if (!connectionsResponse.ok) {
+                  throw new Error('Failed to fetch connections');
                 }
                 
-                // Then refresh assets
+                const connections = await connectionsResponse.json();
+                const azureConnections = connections.filter(conn => conn.connector_type === 'azure_blob');
+                
+                if (azureConnections.length === 0) {
+                  // No connections, just refresh assets
+                  await fetchAssets();
+                  return;
+                }
+                
+                // Discover assets from all Azure connections synchronously (immediate results)
+                const discoveryPromises = azureConnections.map(async (connection) => {
+                  try {
+                    const discoverResponse = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({
+                        containers: [], // Auto-discover all containers
+                        folder_path: '',
+                      }),
+                    });
+                    
+                    if (discoverResponse.ok) {
+                      const result = await discoverResponse.json();
+                      console.log(`Discovery complete for ${connection.name}:`, result);
+                      return result;
+                    } else {
+                      console.warn(`Discovery failed for ${connection.name}`);
+                      return null;
+                    }
+                  } catch (error) {
+                    console.error(`Error discovering ${connection.name}:`, error);
+                    return null;
+                  }
+                });
+                
+                // Wait for all discoveries to complete
+                await Promise.all(discoveryPromises);
+                
+                // Also trigger Airflow DAG in background for scheduled runs
+                try {
+                  await fetch(`${API_BASE_URL}/api/discovery/trigger`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({})
+                  });
+                } catch (error) {
+                  // Ignore Airflow trigger errors - synchronous discovery already completed
+                  console.warn('Airflow DAG trigger failed (non-critical):', error);
+                }
+                
+                // Finally, refresh assets to show newly discovered files
                 await fetchAssets();
               } catch (error) {
                 console.error('Error refreshing:', error);
-                // Still try to fetch assets even if trigger fails
+                // Still try to fetch assets even if discovery fails
                 await fetchAssets();
+              } finally {
+                setLoading(false);
               }
             }}
             disabled={loading}

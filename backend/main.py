@@ -1991,12 +1991,15 @@ def discover_assets(connection_id):
                         existing_asset = check_asset_exists(db, connector_id, f"queue://{queue_name}") if AZURE_AVAILABLE else None
                         
                         # Build asset data
+                        storage_location_str = f"queue://{queue_name}"
+                        asset_id = f"{connector_id}_{queue_name}_{int(datetime.utcnow().timestamp())}"
+                        
                         asset_data = {
+                            "id": asset_id,
                             "name": queue_name,
                             "type": "queue",
                             "catalog": "azure_queue",
                             "connector_id": connector_id,
-                            "storage_location": f"queue://{queue_name}",
                             "columns": [],
                             "business_metadata": {
                                 "description": f"Azure Queue: {queue_name}",
@@ -2006,7 +2009,8 @@ def discover_assets(connection_id):
                             "technical_metadata": {
                                 "service_type": "azure_queue",
                                 "queue_name": queue_name,
-                                "metadata": queue.get("metadata", {})
+                                "metadata": queue.get("metadata", {}),
+                                "storage_location": storage_location_str
                             }
                         }
                         
@@ -2018,13 +2022,28 @@ def discover_assets(connection_id):
                             updated_count += 1
                         else:
                             # Create new asset
-                            asset = Asset(**asset_data)
+                            asset = Asset(
+                                id=asset_data["id"],
+                                name=asset_data["name"],
+                                type=asset_data["type"],
+                                catalog=asset_data["catalog"],
+                                connector_id=asset_data["connector_id"],
+                                columns=asset_data["columns"],
+                                business_metadata=asset_data["business_metadata"],
+                                technical_metadata=asset_data["technical_metadata"]
+                            )
                             db.add(asset)
                             db.flush()
                             
+                            storage_location = {
+                                "type": "azure_queue",
+                                "account_name": config_data.get("account_name", ""),
+                                "queue_name": queue_name
+                            }
+                            
                             discovery = DataDiscovery(
                                 asset_id=asset.id,
-                                storage_location=asset_data["storage_location"],
+                                storage_location=storage_location,
                                 file_metadata={},
                                 schema_json=[],
                                 schema_hash="",
@@ -2070,12 +2089,15 @@ def discover_assets(connection_id):
                         existing_asset = check_asset_exists(db, connector_id, f"table://{table_name}") if AZURE_AVAILABLE else None
                         
                         # Build asset data
+                        storage_location_str = f"table://{table_name}"
+                        asset_id = f"{connector_id}_{table_name}_{int(datetime.utcnow().timestamp())}"
+                        
                         asset_data = {
+                            "id": asset_id,
                             "name": table_name,
                             "type": "table",
                             "catalog": "azure_table",
                             "connector_id": connector_id,
-                            "storage_location": f"table://{table_name}",
                             "columns": [],
                             "business_metadata": {
                                 "description": f"Azure Table: {table_name}",
@@ -2084,7 +2106,8 @@ def discover_assets(connection_id):
                             },
                             "technical_metadata": {
                                 "service_type": "azure_table",
-                                "table_name": table_name
+                                "table_name": table_name,
+                                "storage_location": storage_location_str
                             }
                         }
                         
@@ -2096,13 +2119,28 @@ def discover_assets(connection_id):
                             updated_count += 1
                         else:
                             # Create new asset
-                            asset = Asset(**asset_data)
+                            asset = Asset(
+                                id=asset_data["id"],
+                                name=asset_data["name"],
+                                type=asset_data["type"],
+                                catalog=asset_data["catalog"],
+                                connector_id=asset_data["connector_id"],
+                                columns=asset_data["columns"],
+                                business_metadata=asset_data["business_metadata"],
+                                technical_metadata=asset_data["technical_metadata"]
+                            )
                             db.add(asset)
                             db.flush()
                             
+                            storage_location = {
+                                "type": "azure_table",
+                                "account_name": config_data.get("account_name", ""),
+                                "table_name": table_name
+                            }
+                            
                             discovery = DataDiscovery(
                                 asset_id=asset.id,
-                                storage_location=asset_data["storage_location"],
+                                storage_location=storage_location,
                                 file_metadata={},
                                 schema_json=[],
                                 schema_hash="",
