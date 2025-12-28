@@ -1,8 +1,11 @@
 #!/bin/bash
 # Startup script for Torro services
-# Project is now located at /mnt/torro/torrofinalv2release
+# Uses relative paths - script should be run from project root
 
-cd /mnt/torro/torrofinalv2release
+# Get script directory and project root (parent of script directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+cd "$PROJECT_ROOT"
 
 # Start MySQL if not running
 if ! systemctl is-active --quiet mysqld; then
@@ -59,7 +62,7 @@ echo "Backend:  http://${HOST_IP}:8099"
 echo "Airflow:  http://${HOST_IP}:8080 (user: airflow, pass: airflow)"
 echo "Frontend: http://${HOST_IP}:5162"
 echo ""
-echo "Logs are in: /mnt/torro/torrofinalv2release/logs/"
-echo "PIDs are in: /mnt/torro/torrofinalv2release/logs/*.pid"
+echo "Logs are in: ${PROJECT_ROOT}/logs/"
+echo "PIDs are in: ${PROJECT_ROOT}/logs/*.pid"
 echo ""
 

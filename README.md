@@ -216,7 +216,10 @@ LOG_LEVEL=INFO
 LOG_FILE=app.log
 
 # Database Configuration
-DB_HOST=localhost
+# IMPORTANT:
+# - VM / non-Docker: use your MySQL hostname/IP (example: torrodb.mysql.database.azure.com)
+# - Docker Compose: use the mysql service name: mysql
+DB_HOST=your-mysql-host
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_mysql_password
@@ -327,7 +330,9 @@ nano airflow.cfg
 **Update these sections in `airflow.cfg`:**
 ```ini
 [core]
-sql_alchemy_conn = mysql+pymysql://root:your_mysql_password@localhost:3306/torroforexcel
+; VM / non-Docker: use your MySQL hostname/IP (example: torrodb.mysql.database.azure.com)
+; Docker Compose: use the mysql service name: mysql
+sql_alchemy_conn = mysql+pymysql://root:your_mysql_password@your-mysql-host:3306/torroforexcel
 dags_are_paused_at_creation = False
 
 [webserver]
