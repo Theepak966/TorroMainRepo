@@ -689,30 +689,38 @@ def trigger_discovery():
             import requests
             from requests.auth import HTTPBasicAuth
             
-            trigger_url = f"{airflow_base_url}/api/v1/dags/{dag_id}/dagRuns"
-            airflow_user = os.getenv("AIRFLOW_USER", "airflow")
-            airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
+            # Use Airflow CLI instead of REST API (more reliable with session auth)
+            import subprocess
+            import os as os_module
             
             note = f"Triggered from refresh button"
             if connection_id:
                 note += f" for connection_id: {connection_id}"
             
-            response = requests.post(
-                trigger_url,
-                json={"conf": {}, "note": note},
-                auth=HTTPBasicAuth(airflow_user, airflow_password),
-                timeout=5
+            # Set AIRFLOW_HOME and use CLI to trigger DAG
+            airflow_home = os.getenv("AIRFLOW_HOME", "/mnt/torro/torrofinalv2release/airflow")
+            airflow_bin = os.path.join(airflow_home, "venv", "bin", "airflow")
+            env = os_module.environ.copy()
+            env["AIRFLOW_HOME"] = airflow_home
+            
+            # Use airflow dags trigger command (note: --note is not supported in CLI, use --conf instead)
+            conf_json = f'{{"note": "{note}"}}'
+            result = subprocess.run(
+                [airflow_bin, "dags", "trigger", dag_id, "--conf", conf_json],
+                cwd=airflow_home,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10
             )
             
-            if response.status_code in [200, 201]:
+            if result.returncode == 0:
                 airflow_triggered = True
                 logger.info(f'FN:trigger_discovery airflow_dag_triggered:{dag_id} connection_id:{connection_id}')
             else:
-                logger.warning(f'FN:trigger_discovery airflow_trigger_failed:status:{response.status_code} message:{response.text}')
-                return jsonify({
-                    "error": f"Failed to trigger Airflow DAG: {response.status_code}",
-                    "message": response.text
-                }), 400
+                logger.warning(f'FN:trigger_discovery airflow_trigger_failed:returncode:{result.returncode} stderr:{result.stderr}')
+                # Don't fail the request - just log the warning
+                airflow_triggered = False
         except Exception as e:
             logger.error(f'FN:trigger_discovery airflow_trigger_error:{str(e)}')
             return jsonify({
@@ -865,6 +873,7 @@ def list_connection_files(connection_id):
         
         # Get query parameters
         container_name = request.args.get('container')
+        share_name = request.args.get('share')  # For file shares
         folder_path = request.args.get('folder_path', '')
         file_extensions = request.args.get('file_extensions')
         file_extensions_list = [ext.strip() for ext in file_extensions.split(',')] if file_extensions else None
@@ -875,33 +884,43 @@ def list_connection_files(connection_id):
                 from utils.azure_blob_client import create_azure_blob_client
                 blob_client = create_azure_blob_client(config_data)
                 
-                # Check if this is a Data Lake Gen2 connection
-                is_datalake = config_data.get('storage_type') == 'datalake' or config_data.get('use_dfs_endpoint', False)
-                
-                # If container not specified, list all containers first
-                if not container_name:
+                # If neither container nor share specified, list all services
+                if not container_name and not share_name:
                     containers = blob_client.list_containers()
+                    file_shares = blob_client.list_file_shares()
                     return jsonify({
                         "success": True,
                         "containers": [c["name"] for c in containers],
-                        "message": "Specify 'container' parameter to list files. Available containers listed above."
+                        "file_shares": [s["name"] for s in file_shares],
+                        "message": "Specify 'container' or 'share' parameter to list files. Available services listed above."
                     }), 200
                 
-                # Use Data Lake API for Data Lake Gen2, blob API for regular blob storage
-                if is_datalake and hasattr(blob_client, 'list_datalake_files'):
-                    # Use Data Lake Gen2 API (matches 'az storage fs file list')
-                    files = blob_client.list_datalake_files(
-                        file_system_name=container_name,
-                        path=folder_path,
+                # Handle file share listing
+                if share_name:
+                    files = blob_client.list_file_share_files(
+                        share_name=share_name,
+                        directory_path=folder_path,
                         file_extensions=file_extensions_list
                     )
                 else:
-                    # Use blob API for regular blob storage
-                    files = blob_client.list_blobs(
-                        container_name=container_name,
-                        folder_path=folder_path,
-                        file_extensions=file_extensions_list
-                    )
+                    # Check if this is a Data Lake Gen2 connection
+                    is_datalake = config_data.get('storage_type') == 'datalake' or config_data.get('use_dfs_endpoint', False)
+                    
+                    # Use Data Lake API for Data Lake Gen2, blob API for regular blob storage
+                    if is_datalake and hasattr(blob_client, 'list_datalake_files'):
+                        # Use Data Lake Gen2 API (matches 'az storage fs file list')
+                        files = blob_client.list_datalake_files(
+                            file_system_name=container_name,
+                            path=folder_path,
+                            file_extensions=file_extensions_list
+                        )
+                    else:
+                        # Use blob API for regular blob storage
+                        files = blob_client.list_blobs(
+                            container_name=container_name,
+                            folder_path=folder_path,
+                            file_extensions=file_extensions_list
+                        )
                 
                 # Format response
                 files_list = []
@@ -1025,28 +1044,32 @@ def test_connection(connection_id):
                         }), 200
                     dag_id = "azure_blob_discovery"
                     
-                    import requests
-                    from requests.auth import HTTPBasicAuth
+                    # Use Airflow CLI instead of REST API (more reliable with session auth)
+                    import subprocess
+                    import os as os_module
                     
-                    # Airflow API endpoint to trigger DAG
-                    trigger_url = f"{airflow_base_url}/api/v1/dags/{dag_id}/dagRuns"
+                    # Set AIRFLOW_HOME and use CLI to trigger DAG
+                    airflow_home = os.getenv("AIRFLOW_HOME", "/mnt/torro/torrofinalv2release/airflow")
+                    airflow_bin = os.path.join(airflow_home, "venv", "bin", "airflow")
+                    env = os_module.environ.copy()
+                    env["AIRFLOW_HOME"] = airflow_home
                     
-                    # Use basic auth (default Airflow credentials or from env)
-                    airflow_user = os.getenv("AIRFLOW_USER", "airflow")
-                    airflow_password = os.getenv("AIRFLOW_PASSWORD", "airflow")
-                    
-                    response = requests.post(
-                        trigger_url,
-                        json={"conf": {}, "note": f"Triggered from connection test: {connection_id}"},
-                        auth=HTTPBasicAuth(airflow_user, airflow_password),
-                        timeout=5
+                    # Use airflow dags trigger command (note: --note is not supported in CLI, use --conf instead)
+                    conf_json = f'{{"note": "Triggered from connection test: {connection_id}"}}'
+                    result = subprocess.run(
+                        [airflow_bin, "dags", "trigger", dag_id, "--conf", conf_json],
+                        cwd=airflow_home,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=10
                     )
                     
-                    if response.status_code in [200, 201]:
+                    if result.returncode == 0:
                         airflow_triggered = True
                         logger.info(f'FN:test_connection connection_id:{connection_id} airflow_dag_triggered:{dag_id}')
                     else:
-                        logger.warning(f'FN:test_connection connection_id:{connection_id} airflow_trigger_failed:status:{response.status_code} message:{response.text}')
+                        logger.warning(f'FN:test_connection connection_id:{connection_id} airflow_trigger_failed:returncode:{result.returncode} stderr:{result.stderr}')
                 except Exception as e:
                     logger.warning(f'FN:test_connection connection_id:{connection_id} airflow_trigger_error:{str(e)}')
                     # Fallback: trigger discovery directly
@@ -1115,7 +1138,7 @@ def test_connection(connection_id):
 @app.route('/api/connections/<int:connection_id>/containers', methods=['GET'])
 @handle_error
 def list_containers(connection_id):
-    """List containers for an Azure Blob Storage connection"""
+    """List all Azure Storage services (containers, file shares, queues, tables) for a connection"""
     if not AZURE_AVAILABLE:
         return jsonify({"error": "Azure utilities not available"}), 503
     
@@ -1133,8 +1156,19 @@ def list_containers(connection_id):
         try:
             from utils.azure_blob_client import create_azure_blob_client
             blob_client = create_azure_blob_client(config_data)
+            
+            # Discover all Azure Storage services
             containers = blob_client.list_containers()
-            return jsonify({"containers": containers}), 200
+            file_shares = blob_client.list_file_shares()
+            queues = blob_client.list_queues()
+            tables = blob_client.list_tables()
+            
+            return jsonify({
+                "containers": containers,
+                "file_shares": file_shares,
+                "queues": queues,
+                "tables": tables
+            }), 200
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -1853,6 +1887,255 @@ def discover_assets(connection_id):
                 # Check if there are any non-empty folders
                 has_folders[container_name] = any(f for f in folders if f != "")
             
+            # Discover File Shares
+            file_shares_discovered = 0
+            try:
+                file_shares = blob_client.list_file_shares()
+                logger.info('FN:discover_assets file_shares_count:{}'.format(len(file_shares)))
+                
+                for share in file_shares:
+                    share_name = share["name"]
+                    try:
+                        # List files in the share
+                        share_files = blob_client.list_file_share_files(share_name=share_name, directory_path=folder_path)
+                        
+                        for file_info in share_files:
+                            try:
+                                file_path = file_info.get("full_path", file_info.get("name", ""))
+                                file_extension = file_info.get("name", "").split(".")[-1].lower() if "." in file_info.get("name", "") else ""
+                                connector_id = f"azure_blob_{connection.name}"
+                                
+                                # Check if asset already exists
+                                existing_asset = check_asset_exists(db, connector_id, f"file-share://{share_name}/{file_path}") if AZURE_AVAILABLE else None
+                                
+                                # Build asset data
+                                asset_data = {
+                                    "name": file_info.get("name", "unknown"),
+                                    "type": "file",
+                                    "catalog": "azure_file_share",
+                                    "connector_id": connector_id,
+                                    "storage_location": f"file-share://{share_name}/{file_path}",
+                                    "columns": [],
+                                    "business_metadata": build_business_metadata(file_info, {}, file_extension, share_name),
+                                    "technical_metadata": {
+                                        "file_size": file_info.get("size", 0),
+                                        "content_type": file_info.get("content_type", "application/octet-stream"),
+                                        "last_modified": file_info.get("last_modified"),
+                                        "file_attributes": file_info.get("file_attributes"),
+                                        "service_type": "azure_file_share",
+                                        "share_name": share_name
+                                    }
+                                }
+                                
+                                if existing_asset:
+                                    # Update existing asset
+                                    existing_asset.business_metadata = asset_data["business_metadata"]
+                                    existing_asset.technical_metadata = asset_data["technical_metadata"]
+                                    existing_asset.storage_location = asset_data["storage_location"]
+                                    db.commit()
+                                    updated_count += 1
+                                else:
+                                    # Create new asset
+                                    asset = Asset(**asset_data)
+                                    db.add(asset)
+                                    db.flush()
+                                    
+                                    discovery = DataDiscovery(
+                                        asset_id=asset.id,
+                                        storage_location=asset_data["storage_location"],
+                                        file_metadata={},
+                                        schema_json=[],
+                                        schema_hash="",
+                                        status="pending",
+                                        approval_status=None,
+                                        discovered_at=datetime.utcnow(),
+                                        folder_path=folder_path,
+                                        data_source_type="azure_file_share",
+                                        environment=config_data.get("environment", "production"),
+                                        discovery_info={
+                                            "connection_id": connection_id,
+                                            "connection_name": connection.name,
+                                            "share": share_name,
+                                            "discovered_by": "api_discovery"
+                                        }
+                                    )
+                                    db.add(discovery)
+                                    created_count += 1
+                                    file_shares_discovered += 1
+                            except Exception as e:
+                                logger.error('FN:discover_assets share_name:{} file_name:{} error:{}'.format(share_name, file_info.get("name", "unknown"), str(e)))
+                                skipped_count += 1
+                                continue
+                    except Exception as e:
+                        logger.error('FN:discover_assets share_name:{} error:{}'.format(share_name, str(e)))
+                        continue
+                
+                if file_shares_discovered > 0:
+                    db.commit()
+                    logger.info('FN:discover_assets file_shares_discovered:{}'.format(file_shares_discovered))
+            except Exception as e:
+                logger.warning('FN:discover_assets message:File shares discovery failed error:{}'.format(str(e)))
+            
+            # Discover Queues (queues are assets themselves)
+            queues_discovered = 0
+            try:
+                queues = blob_client.list_queues()
+                logger.info('FN:discover_assets queues_count:{}'.format(len(queues)))
+                
+                for queue in queues:
+                    try:
+                        queue_name = queue["name"]
+                        connector_id = f"azure_blob_{connection.name}"
+                        
+                        # Check if asset already exists
+                        existing_asset = check_asset_exists(db, connector_id, f"queue://{queue_name}") if AZURE_AVAILABLE else None
+                        
+                        # Build asset data
+                        asset_data = {
+                            "name": queue_name,
+                            "type": "queue",
+                            "catalog": "azure_queue",
+                            "connector_id": connector_id,
+                            "storage_location": f"queue://{queue_name}",
+                            "columns": [],
+                            "business_metadata": {
+                                "description": f"Azure Queue: {queue_name}",
+                                "data_type": "queue",
+                                "tags": [queue_name, "azure_queue"]
+                            },
+                            "technical_metadata": {
+                                "service_type": "azure_queue",
+                                "queue_name": queue_name,
+                                "metadata": queue.get("metadata", {})
+                            }
+                        }
+                        
+                        if existing_asset:
+                            # Update existing asset
+                            existing_asset.business_metadata = asset_data["business_metadata"]
+                            existing_asset.technical_metadata = asset_data["technical_metadata"]
+                            db.commit()
+                            updated_count += 1
+                        else:
+                            # Create new asset
+                            asset = Asset(**asset_data)
+                            db.add(asset)
+                            db.flush()
+                            
+                            discovery = DataDiscovery(
+                                asset_id=asset.id,
+                                storage_location=asset_data["storage_location"],
+                                file_metadata={},
+                                schema_json=[],
+                                schema_hash="",
+                                status="pending",
+                                approval_status=None,
+                                discovered_at=datetime.utcnow(),
+                                folder_path="",
+                                data_source_type="azure_queue",
+                                environment=config_data.get("environment", "production"),
+                                discovery_info={
+                                    "connection_id": connection_id,
+                                    "connection_name": connection.name,
+                                    "queue": queue_name,
+                                    "discovered_by": "api_discovery"
+                                }
+                            )
+                            db.add(discovery)
+                            created_count += 1
+                            queues_discovered += 1
+                    except Exception as e:
+                        logger.error('FN:discover_assets queue_name:{} error:{}'.format(queue.get("name", "unknown"), str(e)))
+                        skipped_count += 1
+                        continue
+                
+                if queues_discovered > 0:
+                    db.commit()
+                    logger.info('FN:discover_assets queues_discovered:{}'.format(queues_discovered))
+            except Exception as e:
+                logger.warning('FN:discover_assets message:Queues discovery failed error:{}'.format(str(e)))
+            
+            # Discover Tables (tables are assets themselves)
+            tables_discovered = 0
+            try:
+                tables = blob_client.list_tables()
+                logger.info('FN:discover_assets tables_count:{}'.format(len(tables)))
+                
+                for table in tables:
+                    try:
+                        table_name = table["name"]
+                        connector_id = f"azure_blob_{connection.name}"
+                        
+                        # Check if asset already exists
+                        existing_asset = check_asset_exists(db, connector_id, f"table://{table_name}") if AZURE_AVAILABLE else None
+                        
+                        # Build asset data
+                        asset_data = {
+                            "name": table_name,
+                            "type": "table",
+                            "catalog": "azure_table",
+                            "connector_id": connector_id,
+                            "storage_location": f"table://{table_name}",
+                            "columns": [],
+                            "business_metadata": {
+                                "description": f"Azure Table: {table_name}",
+                                "data_type": "table",
+                                "tags": [table_name, "azure_table"]
+                            },
+                            "technical_metadata": {
+                                "service_type": "azure_table",
+                                "table_name": table_name
+                            }
+                        }
+                        
+                        if existing_asset:
+                            # Update existing asset
+                            existing_asset.business_metadata = asset_data["business_metadata"]
+                            existing_asset.technical_metadata = asset_data["technical_metadata"]
+                            db.commit()
+                            updated_count += 1
+                        else:
+                            # Create new asset
+                            asset = Asset(**asset_data)
+                            db.add(asset)
+                            db.flush()
+                            
+                            discovery = DataDiscovery(
+                                asset_id=asset.id,
+                                storage_location=asset_data["storage_location"],
+                                file_metadata={},
+                                schema_json=[],
+                                schema_hash="",
+                                status="pending",
+                                approval_status=None,
+                                discovered_at=datetime.utcnow(),
+                                folder_path="",
+                                data_source_type="azure_table",
+                                environment=config_data.get("environment", "production"),
+                                discovery_info={
+                                    "connection_id": connection_id,
+                                    "connection_name": connection.name,
+                                    "table": table_name,
+                                    "discovered_by": "api_discovery"
+                                }
+                            )
+                            db.add(discovery)
+                            created_count += 1
+                            tables_discovered += 1
+                    except Exception as e:
+                        logger.error('FN:discover_assets table_name:{} error:{}'.format(table.get("name", "unknown"), str(e)))
+                        skipped_count += 1
+                        continue
+                
+                if tables_discovered > 0:
+                    db.commit()
+                    logger.info('FN:discover_assets tables_discovered:{}'.format(tables_discovered))
+            except Exception as e:
+                logger.warning('FN:discover_assets message:Tables discovery failed error:{}'.format(str(e)))
+            
+            # Update total processed count
+            total_processed = created_count + updated_count
+            
             return jsonify({
                 "success": True,
                 "message": f"Discovery complete: {created_count} new, {updated_count} updated, {skipped_count} skipped",
@@ -1862,7 +2145,13 @@ def discover_assets(connection_id):
                 "skipped_count": skipped_count,
                 "folders": folders_found,
                 "assets_by_folder": folder_structure,
-                "has_folders": has_folders  # Indicates if container has subfolders
+                "has_folders": has_folders,  # Indicates if container has subfolders
+                "services_discovered": {
+                    "containers": len(containers),
+                    "file_shares": file_shares_discovered,
+                    "queues": queues_discovered,
+                    "tables": tables_discovered
+                }
             }), 201
         except Exception as e:
             db.rollback()

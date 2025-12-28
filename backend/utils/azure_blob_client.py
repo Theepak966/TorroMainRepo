@@ -449,6 +449,175 @@ class AzureBlobClient:
             logger.error('FN:list_containers error:{}'.format(str(e)))
             raise
     
+    def _get_account_name(self) -> str:
+        """Extract account name from connection string or account URL"""
+        if hasattr(self, 'connection_string') and self.connection_string:
+            # Extract from connection string: AccountName=xxx;AccountKey=yyy
+            for part in self.connection_string.split(';'):
+                if part.startswith('AccountName='):
+                    return part.split('=')[1]
+        elif hasattr(self, 'account_url') and self.account_url:
+            # Extract from URL: https://accountname.blob.core.windows.net
+            return self.account_url.split('//')[1].split('.')[0]
+        elif hasattr(self, 'dfs_account_url') and self.dfs_account_url:
+            # Extract from DFS URL: https://accountname.dfs.core.windows.net
+            return self.dfs_account_url.split('//')[1].split('.')[0]
+        raise ValueError("Cannot determine account name from connection")
+    
+    def _get_credential_or_connection_string(self):
+        """Get credential or connection string for other Azure Storage services"""
+        if hasattr(self, 'connection_string') and self.connection_string:
+            return self.connection_string, None
+        elif hasattr(self, 'credential') and self.credential:
+            return None, self.credential
+        elif hasattr(self, 'dfs_credential') and self.dfs_credential:
+            return None, self.dfs_credential
+        else:
+            raise ValueError("Cannot create service client - missing credentials")
+    
+    def list_file_shares(self) -> List[Dict]:
+        """List all file shares in the storage account"""
+        try:
+            from azure.storage.fileshare import ShareServiceClient
+            
+            connection_string, credential = self._get_credential_or_connection_string()
+            
+            if connection_string:
+                share_service_client = ShareServiceClient.from_connection_string(connection_string)
+            elif credential:
+                account_name = self._get_account_name()
+                share_service_url = f"https://{account_name}.file.core.windows.net"
+                share_service_client = ShareServiceClient(account_url=share_service_url, credential=credential)
+            else:
+                raise ValueError("Cannot create ShareServiceClient - missing credentials")
+            
+            shares = []
+            for share in share_service_client.list_shares():
+                shares.append({
+                    "name": share.name,
+                    "last_modified": share.last_modified.isoformat() if share.last_modified else None,
+                    "quota": share.quota,
+                    "metadata": share.metadata or {}
+                })
+            
+            logger.info('FN:list_file_shares share_count:{}'.format(len(shares)))
+            return shares
+        except ImportError:
+            logger.warning('FN:list_file_shares message:azure-storage-file-share package not installed')
+            return []
+        except Exception as e:
+            logger.error('FN:list_file_shares error:{}'.format(str(e)))
+            raise
+    
+    def list_queues(self) -> List[Dict]:
+        """List all queues in the storage account"""
+        try:
+            from azure.storage.queue import QueueServiceClient
+            
+            connection_string, credential = self._get_credential_or_connection_string()
+            
+            if connection_string:
+                queue_service_client = QueueServiceClient.from_connection_string(connection_string)
+            elif credential:
+                account_name = self._get_account_name()
+                queue_service_url = f"https://{account_name}.queue.core.windows.net"
+                queue_service_client = QueueServiceClient(account_url=queue_service_url, credential=credential)
+            else:
+                raise ValueError("Cannot create QueueServiceClient - missing credentials")
+            
+            queues = []
+            for queue in queue_service_client.list_queues():
+                queues.append({
+                    "name": queue.name,
+                    "metadata": queue.metadata or {}
+                })
+            
+            logger.info('FN:list_queues queue_count:{}'.format(len(queues)))
+            return queues
+        except ImportError:
+            logger.warning('FN:list_queues message:azure-storage-queue package not installed')
+            return []
+        except Exception as e:
+            logger.error('FN:list_queues error:{}'.format(str(e)))
+            raise
+    
+    def list_tables(self) -> List[Dict]:
+        """List all tables in the storage account"""
+        try:
+            from azure.data.tables import TableServiceClient
+            
+            connection_string, credential = self._get_credential_or_connection_string()
+            
+            if connection_string:
+                table_service_client = TableServiceClient.from_connection_string(connection_string)
+            elif credential:
+                account_name = self._get_account_name()
+                table_service_url = f"https://{account_name}.table.core.windows.net"
+                table_service_client = TableServiceClient(endpoint=table_service_url, credential=credential)
+            else:
+                raise ValueError("Cannot create TableServiceClient - missing credentials")
+            
+            tables = []
+            for table in table_service_client.list_tables():
+                tables.append({
+                    "name": table.name
+                })
+            
+            logger.info('FN:list_tables table_count:{}'.format(len(tables)))
+            return tables
+        except ImportError:
+            logger.warning('FN:list_tables message:azure-data-tables package not installed')
+            return []
+        except Exception as e:
+            logger.error('FN:list_tables error:{}'.format(str(e)))
+            raise
+    
+    def list_file_share_files(self, share_name: str, directory_path: str = "", file_extensions: List[str] = None) -> List[Dict]:
+        """List files in an Azure File Share"""
+        try:
+            from azure.storage.fileshare import ShareClient, ShareDirectoryClient
+            
+            connection_string, credential = self._get_credential_or_connection_string()
+            
+            if connection_string:
+                share_client = ShareClient.from_connection_string(connection_string, share_name)
+            elif credential:
+                account_name = self._get_account_name()
+                share_service_url = f"https://{account_name}.file.core.windows.net"
+                share_client = ShareClient(account_url=f"{share_service_url}/{share_name}", credential=credential)
+            else:
+                raise ValueError("Cannot create ShareClient - missing credentials")
+            
+            directory_client = share_client.get_directory_client(directory_path)
+            files = []
+            
+            for item in directory_client.list_directories_and_files():
+                if item.is_directory:
+                    continue  # Skip directories for now, or handle recursively
+                
+                if file_extensions:
+                    if not any(item.name.lower().endswith(ext.lower()) for ext in file_extensions):
+                        continue
+                
+                file_info = {
+                    "name": item.name,
+                    "full_path": f"{directory_path}/{item.name}" if directory_path else item.name,
+                    "size": item.size,
+                    "content_type": getattr(item, 'content_type', None),
+                    "last_modified": item.last_modified.isoformat() if item.last_modified else None,
+                    "file_attributes": getattr(item, 'file_attributes', None),
+                }
+                files.append(file_info)
+            
+            logger.info('FN:list_file_share_files share_name:{} directory_path:{} file_count:{}'.format(share_name, directory_path, len(files)))
+            return files
+        except ImportError:
+            logger.warning('FN:list_file_share_files message:azure-storage-file-share package not installed')
+            return []
+        except Exception as e:
+            logger.error('FN:list_file_share_files share_name:{} directory_path:{} error:{}'.format(share_name, directory_path, str(e)))
+            raise
+    
     def test_connection(self) -> Dict:
         """Test the connection to Azure Blob Storage"""
         try:

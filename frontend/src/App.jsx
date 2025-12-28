@@ -78,7 +78,7 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Router>
+      <Router basename="/airflow-fe">
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<AssetsPage />} />

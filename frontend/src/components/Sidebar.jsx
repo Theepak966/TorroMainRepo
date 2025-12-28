@@ -23,16 +23,14 @@ const Sidebar = ({ open, onClose }) => {
   const location = useLocation();
 
   const menuItems = [
-    { label: 'Connectors', icon: <Settings />, path: '/connectors' },
-    { label: 'Discovered Assets', icon: <AccountTree />, path: '/' },
-    { label: 'Data Lineage', icon: <Timeline />, path: '/lineage' },
+    { label: 'Connectors', icon: <Settings />, path: 'connectors' },
+    { label: 'Discovered Assets', icon: <AccountTree />, path: '' },
+    { label: 'Data Lineage', icon: <Timeline />, path: 'lineage' },
   ];
 
   const handleItemClick = (path) => {
-    if (path) {
-      navigate(path);
-      onClose();
-    }
+    navigate(path || '/');
+    onClose();
   };
 
   return (
@@ -51,7 +49,10 @@ const Sidebar = ({ open, onClose }) => {
       <Box sx={{ pt: 3 }}>
         <List sx={{ px: 2 }}>
           {menuItems.map((item) => {
-            const isActive = location.pathname === item.path;
+            const itemPath = item.path === '' ? '/' : `/${item.path}`;
+            // React Router with basename returns pathname relative to basename
+            const normalizedPath = location.pathname.replace(/^\/airflow-fe/, '') || '/';
+            const isActive = normalizedPath === itemPath;
             return (
               <ListItem key={item.path} disablePadding>
                 <ListItemButton

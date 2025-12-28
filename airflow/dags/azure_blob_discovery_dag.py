@@ -558,6 +558,287 @@ def discover_azure_blobs(**context):
             logger.error('FN:discover_azure_blobs account_name:{} error:{}'.format(account_name, str(e)))
             continue
     
+    # Discover File Shares, Queues, and Tables for all connections
+    for connection_data in db_connections:
+        connection_id = connection_data["id"]
+        connection_name = connection_data["name"]
+        config_data = connection_data.get("config", {})
+        storage_type = config_data.get("storage_type", "blob")
+        environment = config_data.get("environment", "production")
+        
+        try:
+            blob_client = create_azure_blob_client(config_data)
+            connector_id = f"azure_blob_{connection_name}"
+            
+            # Discover File Shares
+            try:
+                file_shares = blob_client.list_file_shares()
+                logger.info('FN:discover_azure_blobs connection_id:{} file_shares_count:{}'.format(connection_id, len(file_shares)))
+                
+                for share in file_shares:
+                    share_name = share["name"]
+                    try:
+                        share_files = blob_client.list_file_share_files(share_name=share_name, directory_path="")
+                        
+                        for file_info in share_files:
+                            try:
+                                file_path = file_info.get("full_path", file_info.get("name", ""))
+                                
+                                # Check if asset exists
+                                existing_record = retry_db_operation(max_retries=None, base_delay=1.0, max_delay=60.0, max_total_time=3600.0)(
+                                    check_asset_exists
+                                )(
+                                    connector_id=connector_id,
+                                    storage_path=f"file-share://{share_name}/{file_path}"
+                                )
+                                
+                                if existing_record:
+                                    continue
+                                
+                                # Create asset for file share file (similar to blob processing)
+                                # Simplified version - can be enhanced with full metadata extraction
+                                storage_location = {
+                                    "type": "azure_file_share",
+                                    "account_name": config_data.get("account_name", ""),
+                                    "share_name": share_name,
+                                    "file_path": file_path
+                                }
+                                
+                                # Insert asset and discovery record
+                                conn = get_db_connection()
+                                try:
+                                    with conn.cursor() as cursor:
+                                        cursor.execute("""
+                                            INSERT INTO assets (name, type, catalog, connector_id, storage_location, columns, business_metadata, technical_metadata, created_at, updated_at)
+                                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                                        """, (
+                                            file_info.get("name", "unknown"),
+                                            "file",
+                                            "azure_file_share",
+                                            connector_id,
+                                            json.dumps(storage_location),
+                                            json.dumps([]),
+                                            json.dumps({"description": f"Azure File Share: {share_name}/{file_path}"}),
+                                            json.dumps({
+                                                "file_size": file_info.get("size", 0),
+                                                "content_type": file_info.get("content_type", "application/octet-stream"),
+                                                "service_type": "azure_file_share",
+                                                "share_name": share_name
+                                            })
+                                        ))
+                                        asset_id = cursor.lastrowid
+                                        
+                                        cursor.execute("""
+                                            INSERT INTO data_discovery (asset_id, storage_location, file_metadata, schema_json, schema_hash, status, approval_status, discovered_at, folder_path, data_source_type, environment, discovery_info)
+                                            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                                        """, (
+                                            asset_id,
+                                            json.dumps(storage_location),
+                                            json.dumps({}),
+                                            json.dumps([]),
+                                            "",
+                                            "pending",
+                                            None,
+                                            "",
+                                            "azure_file_share",
+                                            environment,
+                                            json.dumps({
+                                                "connection_id": connection_id,
+                                                "connection_name": connection_name,
+                                                "share": share_name,
+                                                "discovered_by": "airflow_dag"
+                                            })
+                                        ))
+                                        conn.commit()
+                                        all_new_discoveries.append({
+                                            "id": asset_id,
+                                            "file_name": file_info.get("name", "unknown"),
+                                            "storage_path": f"file-share://{share_name}/{file_path}",
+                                        })
+                                        logger.info('FN:discover_azure_blobs file_share_file_discovered:{}'.format(file_path))
+                            except Exception as e:
+                                logger.error('FN:discover_azure_blobs share_name:{} file_name:{} error:{}'.format(share_name, file_info.get("name", "unknown"), str(e)))
+                                continue
+                    except Exception as e:
+                        logger.error('FN:discover_azure_blobs share_name:{} error:{}'.format(share_name, str(e)))
+                        continue
+            except Exception as e:
+                logger.warning('FN:discover_azure_blobs connection_id:{} message:File shares discovery failed error:{}'.format(connection_id, str(e)))
+            
+            # Discover Queues
+            try:
+                queues = blob_client.list_queues()
+                logger.info('FN:discover_azure_blobs connection_id:{} queues_count:{}'.format(connection_id, len(queues)))
+                
+                for queue in queues:
+                    try:
+                        queue_name = queue["name"]
+                        
+                        # Check if asset exists
+                        existing_record = retry_db_operation(max_retries=None, base_delay=1.0, max_delay=60.0, max_total_time=3600.0)(
+                            check_asset_exists
+                        )(
+                            connector_id=connector_id,
+                            storage_path=f"queue://{queue_name}"
+                        )
+                        
+                        if existing_record:
+                            continue
+                        
+                        # Create asset for queue
+                        storage_location = {
+                            "type": "azure_queue",
+                            "account_name": config_data.get("account_name", ""),
+                            "queue_name": queue_name
+                        }
+                        
+                        conn = get_db_connection()
+                        try:
+                            with conn.cursor() as cursor:
+                                cursor.execute("""
+                                    INSERT INTO assets (name, type, catalog, connector_id, storage_location, columns, business_metadata, technical_metadata, created_at, updated_at)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                                """, (
+                                    queue_name,
+                                    "queue",
+                                    "azure_queue",
+                                    connector_id,
+                                    json.dumps(storage_location),
+                                    json.dumps([]),
+                                    json.dumps({"description": f"Azure Queue: {queue_name}"}),
+                                    json.dumps({
+                                        "service_type": "azure_queue",
+                                        "queue_name": queue_name
+                                    })
+                                ))
+                                asset_id = cursor.lastrowid
+                                
+                                cursor.execute("""
+                                    INSERT INTO data_discovery (asset_id, storage_location, file_metadata, schema_json, schema_hash, status, approval_status, discovered_at, folder_path, data_source_type, environment, discovery_info)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                                """, (
+                                    asset_id,
+                                    json.dumps(storage_location),
+                                    json.dumps({}),
+                                    json.dumps([]),
+                                    "",
+                                    "pending",
+                                    None,
+                                    "",
+                                    "azure_queue",
+                                    environment,
+                                    json.dumps({
+                                        "connection_id": connection_id,
+                                        "connection_name": connection_name,
+                                        "queue": queue_name,
+                                        "discovered_by": "airflow_dag"
+                                    })
+                                ))
+                                conn.commit()
+                                all_new_discoveries.append({
+                                    "id": asset_id,
+                                    "file_name": queue_name,
+                                    "storage_path": f"queue://{queue_name}",
+                                })
+                                logger.info('FN:discover_azure_blobs queue_discovered:{}'.format(queue_name))
+                        except Exception as e:
+                            conn.rollback()
+                            logger.error('FN:discover_azure_blobs queue_name:{} error:{}'.format(queue_name, str(e)))
+                    except Exception as e:
+                        logger.error('FN:discover_azure_blobs queue_name:{} error:{}'.format(queue.get("name", "unknown"), str(e)))
+                        continue
+            except Exception as e:
+                logger.warning('FN:discover_azure_blobs connection_id:{} message:Queues discovery failed error:{}'.format(connection_id, str(e)))
+            
+            # Discover Tables
+            try:
+                tables = blob_client.list_tables()
+                logger.info('FN:discover_azure_blobs connection_id:{} tables_count:{}'.format(connection_id, len(tables)))
+                
+                for table in tables:
+                    try:
+                        table_name = table["name"]
+                        
+                        # Check if asset exists
+                        existing_record = retry_db_operation(max_retries=None, base_delay=1.0, max_delay=60.0, max_total_time=3600.0)(
+                            check_asset_exists
+                        )(
+                            connector_id=connector_id,
+                            storage_path=f"table://{table_name}"
+                        )
+                        
+                        if existing_record:
+                            continue
+                        
+                        # Create asset for table
+                        storage_location = {
+                            "type": "azure_table",
+                            "account_name": config_data.get("account_name", ""),
+                            "table_name": table_name
+                        }
+                        
+                        conn = get_db_connection()
+                        try:
+                            with conn.cursor() as cursor:
+                                cursor.execute("""
+                                    INSERT INTO assets (name, type, catalog, connector_id, storage_location, columns, business_metadata, technical_metadata, created_at, updated_at)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                                """, (
+                                    table_name,
+                                    "table",
+                                    "azure_table",
+                                    connector_id,
+                                    json.dumps(storage_location),
+                                    json.dumps([]),
+                                    json.dumps({"description": f"Azure Table: {table_name}"}),
+                                    json.dumps({
+                                        "service_type": "azure_table",
+                                        "table_name": table_name
+                                    })
+                                ))
+                                asset_id = cursor.lastrowid
+                                
+                                cursor.execute("""
+                                    INSERT INTO data_discovery (asset_id, storage_location, file_metadata, schema_json, schema_hash, status, approval_status, discovered_at, folder_path, data_source_type, environment, discovery_info)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                                """, (
+                                    asset_id,
+                                    json.dumps(storage_location),
+                                    json.dumps({}),
+                                    json.dumps([]),
+                                    "",
+                                    "pending",
+                                    None,
+                                    "",
+                                    "azure_table",
+                                    environment,
+                                    json.dumps({
+                                        "connection_id": connection_id,
+                                        "connection_name": connection_name,
+                                        "table": table_name,
+                                        "discovered_by": "airflow_dag"
+                                    })
+                                ))
+                                conn.commit()
+                                all_new_discoveries.append({
+                                    "id": asset_id,
+                                    "file_name": table_name,
+                                    "storage_path": f"table://{table_name}",
+                                })
+                                logger.info('FN:discover_azure_blobs table_discovered:{}'.format(table_name))
+                        except Exception as e:
+                            conn.rollback()
+                            logger.error('FN:discover_azure_blobs table_name:{} error:{}'.format(table_name, str(e)))
+                    except Exception as e:
+                        logger.error('FN:discover_azure_blobs table_name:{} error:{}'.format(table.get("name", "unknown"), str(e)))
+                        continue
+            except Exception as e:
+                logger.warning('FN:discover_azure_blobs connection_id:{} message:Tables discovery failed error:{}'.format(connection_id, str(e)))
+        
+        except Exception as e:
+            logger.error('FN:discover_azure_blobs connection_id:{} connection_name:{} error:{}'.format(connection_id, connection_name, str(e)))
+            continue
+    
     batch_end_time = datetime.utcnow()
     duration_ms = int((batch_end_time - batch_start_time).total_seconds() * 1000)
     duration_sec = duration_ms / 1000.0

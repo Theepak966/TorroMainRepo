@@ -45,7 +45,7 @@ const Header = ({ onMenuClick }) => {
         {}
         <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 2 }}>
           <img 
-            src="/torro-logo.svg" 
+            src="/airflow-fe/torro-logo.svg" 
             alt="Torro Logo" 
             style={{ 
               height: '40px', 

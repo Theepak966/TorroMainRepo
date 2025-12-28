@@ -3,6 +3,7 @@ Airflow DAG to automatically extract SQL queries and create lineage relationship
 Scans DAG files for SQL queries and extracts lineage
 """
 from datetime import datetime, timedelta
+from typing import List, Dict
 from airflow import DAG  # type: ignore
 from airflow.operators.python import PythonOperator  # type: ignore
 import logging
