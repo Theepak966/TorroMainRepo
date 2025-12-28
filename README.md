@@ -2,7 +2,7 @@
 
 A comprehensive data discovery and governance platform for Azure Storage services, featuring automated metadata extraction, PII detection, approval workflows, and data lineage tracking.
 
-## 🚀 Features
+## Features
 
 - **Complete Azure Storage Support**: Discover and catalog assets from:
   - Azure Blob Storage (containers and blobs)
@@ -22,7 +22,7 @@ A comprehensive data discovery and governance platform for Azure Storage service
 - **High Performance**: Optimized for large-scale discovery (3000-5000+ assets)
 - **Read-Only Operations**: All Azure operations are read-only (Storage Blob Data Reader role)
 
-## 📋 Prerequisites
+## Prerequisites
 
 - Python 3.8+
 - Node.js 16+
@@ -32,7 +32,7 @@ A comprehensive data discovery and governance platform for Azure Storage service
 - Azure Service Principal with **Storage Blob Data Reader** role (for Service Principal auth)
 - OR Azure Storage Account connection string (for Connection String auth)
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
@@ -54,7 +54,7 @@ A comprehensive data discovery and governance platform for Azure Storage service
                      └─────────────┘
 ```
 
-## 🔧 Installation
+## Installation
 
 ### 1. Clone Repository
 
@@ -148,7 +148,7 @@ mysql -u root -p < database/schema.sql
 mysql -u root -p < database/lineage_schema.sql
 ```
 
-## 🚀 Running the Application
+## Running the Application
 
 ### Option 1: Manual Start
 
@@ -186,7 +186,7 @@ Access services:
 - Airflow UI: http://localhost:8080
 - MySQL: localhost:3307
 
-## 🔐 Azure Configuration
+## Azure Configuration
 
 ### Authentication Methods
 
@@ -247,7 +247,7 @@ Example:
 abfs://lh-enriched@hblazlakehousepreprdstg1.dfs.core.windows.net/visionplus/ATH3
 ```
 
-## 📊 Performance
+## Performance
 
 ### Discovery Speed
 
@@ -263,7 +263,7 @@ abfs://lh-enriched@hblazlakehousepreprdstg1.dfs.core.windows.net/visionplus/ATH3
 - **Smart Deduplication**: ETag-based quick hash checks to skip unchanged files
 - **Complete Metadata**: All files get full metadata extraction (properties, samples, schema)
 
-## 🔌 API Endpoints
+## API Endpoints
 
 ### Connections
 - `GET /api/connections` - List all connections
@@ -294,7 +294,7 @@ abfs://lh-enriched@hblazlakehousepreprdstg1.dfs.core.windows.net/visionplus/ATH3
 ### Health
 - `GET /api/health` - Health check
 
-## 🏦 Bank VM Deployment
+## Bank VM Deployment
 
 ### Environment Variables
 
@@ -346,7 +346,7 @@ VITE_API_BASE_URL=http://<backend-host>:8099
 - [ ] Firewall rules configured
 - [ ] Logs directory created and writable
 
-## 🐳 Docker Deployment
+## Docker Deployment
 
 ### Using Docker Compose
 
@@ -367,7 +367,7 @@ docker-compose up -d
 
 Set environment variables in `docker-compose.yml` or use `.env` files in respective directories.
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Backend Not Starting
 
@@ -403,7 +403,7 @@ Set environment variables in `docker-compose.yml` or use `.env` files in respect
 - Ensure all connections are active
 - Try manual discovery via API: `POST /api/connections/<id>/discover`
 
-## 📝 File Structure
+## File Structure
 
 ```
 torroforazure/
@@ -426,7 +426,7 @@ torroforazure/
 └── logs/             # Application logs
 ```
 
-## 🔒 Security Notes
+## Security Notes
 
 - Service Principal credentials can be hardcoded in frontend (bank requirement) OR use Connection String
 - All Azure operations are read-only (Storage Blob Data Reader, Queue Data Reader, Table Data Reader, File Data Reader)
@@ -434,7 +434,7 @@ torroforazure/
 - Connection strings stored securely in database (encrypted at rest)
 - All API calls use HTTPS for Azure operations
 
-## 🔄 Discovery Methods
+## Discovery Methods
 
 ### Immediate Discovery (Refresh Button)
 
@@ -450,7 +450,7 @@ The Airflow DAG runs automatically on schedule:
 - Updates the database when complete
 - Can be triggered manually via API
 
-## 📈 Monitoring
+## Monitoring
 
 ### Logs
 
@@ -464,10 +464,3 @@ The Airflow DAG runs automatically on schedule:
 - Backend: `GET http://localhost:8099/api/health`
 - Airflow: `GET http://localhost:8080/health`
 
-## 🤝 Support
-
-For issues or questions, check the logs in the `logs/` directory and verify environment variable configuration.
-
-## 📄 License
-
-[Your License Here]
