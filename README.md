@@ -56,59 +56,157 @@ A comprehensive data discovery and governance platform for Azure Storage service
 
 ## Installation
 
-### 1. Clone Repository
+### Step 1: System Prerequisites
+
+#### Install Python 3.8+ (Linux/RHEL/CentOS)
+```bash
+sudo dnf install python38 python38-devel python38-pip gcc gcc-c++ make
+# Or for Ubuntu/Debian:
+# sudo apt-get update
+# sudo apt-get install python3.8 python3.8-venv python3.8-dev build-essential
+```
+
+#### Install Node.js 16+ (Linux)
+```bash
+# Using NodeSource repository
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo dnf install -y nodejs
+# Or for Ubuntu/Debian:
+# curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
+# sudo apt-get install -y nodejs
+
+# Verify installation
+node --version  # Should be 16+ or 20+
+npm --version
+```
+
+#### Install MySQL 8.0+ (Linux)
+```bash
+sudo dnf install mysql mysql-server
+# Or for Ubuntu/Debian:
+# sudo apt-get install mysql-server
+
+# Start MySQL service
+sudo systemctl start mysqld
+sudo systemctl enable mysqld
+
+# Secure MySQL installation (set root password)
+sudo mysql_secure_installation
+```
+
+### Step 2: Clone Repository
 
 ```bash
 git clone <repository-url>
-cd torroforazure
+cd torrofinalv2release
 ```
 
-### 2. Backend Setup
+### Step 3: Database Setup
+
+```bash
+# Create database
+mysql -u root -p
+CREATE DATABASE torroforexcel;
+EXIT;
+
+# Load schemas
+mysql -u root -p torroforexcel < database/schema.sql
+mysql -u root -p torroforexcel < database/lineage_schema.sql
+```
+
+### Step 4: Backend Setup
 
 ```bash
 cd backend
+
+# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
+
+# Install Gunicorn for production
+pip install gunicorn
 ```
 
 Create `backend/.env`:
 ```env
 # Flask Configuration
-FLASK_HOST=0.0.0.0
-FLASK_PORT=8099
-FLASK_ENV=development
+FLASK_ENV=production
 FLASK_DEBUG=false
+SECRET_KEY=your-secret-key-here-change-in-production
+ALLOWED_ORIGINS=*
+LOG_LEVEL=INFO
+LOG_FILE=app.log
 
 # Database Configuration
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
-DB_PASSWORD=your_password
+DB_PASSWORD=your_mysql_password
 DB_NAME=torroforexcel
+
+# API Configuration
+API_VERSION=v1
+
+# Server Configuration
+FLASK_HOST=0.0.0.0
+FLASK_PORT=8099
 
 # Airflow Configuration
 AIRFLOW_BASE_URL=http://localhost:8080
 AIRFLOW_USER=airflow
 AIRFLOW_PASSWORD=airflow
-
-# Logging
-LOG_LEVEL=INFO
-LOG_FILE=app.log
 ```
 
-### 3. Airflow Setup
+**Backend Production Start (using Gunicorn):**
+```bash
+cd backend
+source venv/bin/activate
+gunicorn --bind 0.0.0.0:8099 --workers 4 --timeout 300 --access-logfile ../logs/backend-access.log --error-logfile ../logs/backend.log main:app
+```
+
+**Backend Development Start:**
+```bash
+cd backend
+source venv/bin/activate
+python main.py
+```
+
+### Step 5: Airflow Setup
 
 ```bash
 cd airflow
+
+# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
+
+# Install dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
 
-# Initialize Airflow
+# Set Airflow home
 export AIRFLOW_HOME=$(pwd)
+
+# Initialize Airflow database
 airflow db init
-airflow users create --username airflow --password airflow --firstname Admin --lastname User --role Admin --email admin@example.com
+
+# Create Airflow admin user
+airflow users create \
+    --username airflow \
+    --password airflow \
+    --firstname Admin \
+    --lastname User \
+    --role Admin \
+    --email admin@example.com
+
+# Configure Airflow (edit airflow.cfg)
+# Set sql_alchemy_conn to MySQL:
+# sql_alchemy_conn = mysql+pymysql://root:your_password@localhost:3306/torroforexcel
+# Set base_url, web_server_port, secret_key, enable_proxy_fix
 ```
 
 Create `airflow/.env`:
@@ -117,63 +215,272 @@ Create `airflow/.env`:
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_USER=root
-MYSQL_PASSWORD=your_password
+MYSQL_PASSWORD=your_mysql_password
 MYSQL_DATABASE=torroforexcel
+
+# Notification Configuration (Optional)
+NOTIFICATION_EMAILS=
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
 
 # Airflow Configuration
 AIRFLOW_DAG_SCHEDULE=0 * * * *
 FRONTEND_URL=http://localhost:5162
-
-# Optional: Azure AI Language (for PII detection)
-AZURE_AI_LANGUAGE_ENDPOINT=
-AZURE_AI_LANGUAGE_KEY=
 ```
 
-### 4. Frontend Setup
+**Airflow Configuration (airflow/airflow.cfg):**
+```ini
+[core]
+sql_alchemy_conn = mysql+pymysql://root:your_password@localhost:3306/torroforexcel
+dags_are_paused_at_creation = False
+
+[webserver]
+base_url = http://localhost:8080
+web_server_host = 0.0.0.0
+web_server_port = 8080
+secret_key = your-secret-key-here
+enable_proxy_fix = True
+```
+
+**Start Airflow Webserver:**
+```bash
+cd airflow
+export AIRFLOW_HOME=$(pwd)
+source venv/bin/activate
+airflow webserver --hostname 0.0.0.0 --port 8080
+```
+
+**Start Airflow Scheduler (in separate terminal):**
+```bash
+cd airflow
+export AIRFLOW_HOME=$(pwd)
+source venv/bin/activate
+airflow scheduler
+```
+
+### Step 6: Frontend Setup
 
 ```bash
 cd frontend
+
+# Install dependencies
 npm install
+
+# Build for production (optional)
+npm run build
 ```
 
 Create `frontend/.env`:
 ```env
+# Backend API Base URL
 VITE_API_BASE_URL=http://localhost:8099
+
+# Optional: Azure Service Principal Credentials (if hardcoding)
+VITE_AZURE_STORAGE_ACCOUNT_NAME=
+VITE_AZURE_CLIENT_ID=
+VITE_AZURE_CLIENT_SECRET=
+VITE_AZURE_TENANT_ID=
+VITE_AZURE_DATALAKE_PATHS=
 ```
 
-### 5. Database Setup
-
-```bash
-mysql -u root -p < database/schema.sql
-mysql -u root -p < database/lineage_schema.sql
-```
-
-## Running the Application
-
-### Option 1: Manual Start
-
-**Backend:**
-```bash
-cd backend
-python3 main.py
-```
-
-**Airflow:**
-```bash
-cd airflow
-export AIRFLOW_HOME=$(pwd)
-airflow webserver --port 8080
-# In another terminal:
-airflow scheduler
-```
-
-**Frontend:**
+**Frontend Development Start:**
 ```bash
 cd frontend
 npm run dev
 ```
 
-### Option 2: Docker (Recommended)
+**Frontend Production Start:**
+```bash
+cd frontend
+npm run build
+# Serve with a web server (nginx, apache, or serve)
+npx serve -s dist -l 5162
+```
+
+## Running the Application
+
+### Option 1: Using Startup Script (Recommended)
+
+The project includes a startup script that starts all services:
+
+```bash
+# Make script executable
+chmod +x start_services.sh
+
+# Start all services
+./start_services.sh
+
+# Check service status
+ps aux | grep -E "gunicorn|airflow|node|vite"
+
+# View logs
+tail -f logs/backend.log
+tail -f logs/airflow-webserver.log
+tail -f logs/airflow-scheduler.log
+tail -f logs/frontend.log
+```
+
+**Stop all services:**
+```bash
+# Kill all services
+pkill -f "gunicorn.*main:app"
+pkill -f "airflow webserver"
+pkill -f "airflow scheduler"
+pkill -f "vite"
+```
+
+### Option 2: Manual Start (Development)
+
+**Terminal 1 - Backend:**
+```bash
+cd backend
+source venv/bin/activate
+python main.py
+# Or for production:
+# gunicorn --bind 0.0.0.0:8099 --workers 4 main:app
+```
+
+**Terminal 2 - Airflow Webserver:**
+```bash
+cd airflow
+export AIRFLOW_HOME=$(pwd)
+source venv/bin/activate
+airflow webserver --hostname 0.0.0.0 --port 8080
+```
+
+**Terminal 3 - Airflow Scheduler:**
+```bash
+cd airflow
+export AIRFLOW_HOME=$(pwd)
+source venv/bin/activate
+airflow scheduler
+```
+
+**Terminal 4 - Frontend:**
+```bash
+cd frontend
+npm run dev
+```
+
+### Option 3: Production Deployment with Nginx
+
+#### Install and Configure Nginx
+
+```bash
+# Install Nginx
+sudo dnf install nginx
+# Or for Ubuntu/Debian:
+# sudo apt-get install nginx
+
+# Create Nginx configuration
+sudo nano /etc/nginx/conf.d/torro-reverse-proxy.conf
+```
+
+**Nginx Configuration (`/etc/nginx/conf.d/torro-reverse-proxy.conf`):**
+```nginx
+# HTTP to HTTPS redirect
+server {
+    listen 80;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS server
+server {
+    listen 443 ssl http2;
+    server_name _;
+
+    # SSL certificates (self-signed for testing, use Let's Encrypt for production)
+    ssl_certificate /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Frontend
+    location /airflow-fe/ {
+        proxy_pass http://127.0.0.1:5162/airflow-fe/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend API
+    location /airflow-be/api/ {
+        rewrite ^/airflow-be/api(/.*)$ /api$1 break;
+        proxy_pass http://127.0.0.1:8099;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Airflow UI
+    location /airflow {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+
+    # Health check
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+}
+```
+
+**Generate SSL Certificates (Self-Signed):**
+```bash
+sudo mkdir -p /etc/nginx/ssl
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/nginx/ssl/key.pem \
+    -out /etc/nginx/ssl/cert.pem
+```
+
+**Enable SELinux for Nginx (if using SELinux):**
+```bash
+sudo setsebool -P httpd_can_network_connect 1
+```
+
+**Start Nginx:**
+```bash
+sudo systemctl start nginx
+sudo systemctl enable nginx
+sudo nginx -t  # Test configuration
+sudo systemctl reload nginx
+```
+
+**Configure Firewall:**
+```bash
+# Allow HTTP and HTTPS
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+
+# Or for Ubuntu/Debian:
+# sudo ufw allow 80/tcp
+# sudo ufw allow 443/tcp
+```
+
+**Access Services via Nginx:**
+- Frontend: `https://your-server-ip/airflow-fe/`
+- Backend API: `https://your-server-ip/airflow-be/api/health`
+- Airflow UI: `https://your-server-ip/airflow/`
+
+### Option 4: Docker (Alternative)
 
 ```bash
 cd docker
@@ -336,15 +643,79 @@ VITE_API_BASE_URL=http://<backend-host>:8099
 - **Database**: Read/Write access to MySQL database
 - **Network**: Access to Azure Storage Account, MySQL, and Airflow
 
-### Deployment Checklist
+### Complete Deployment Checklist
 
-- [ ] All environment variables configured
-- [ ] Service Principal credentials hardcoded in frontend
-- [ ] Database schema created
-- [ ] Airflow DAGs loaded and active
-- [ ] All services accessible on network
-- [ ] Firewall rules configured
-- [ ] Logs directory created and writable
+**System Setup:**
+- [ ] Python 3.8+ installed
+- [ ] Node.js 16+ installed
+- [ ] MySQL 8.0+ installed and running
+- [ ] All system dependencies installed (gcc, make, etc.)
+
+**Database Setup:**
+- [ ] MySQL service started
+- [ ] Database `torroforexcel` created
+- [ ] Schema loaded (`database/schema.sql`)
+- [ ] Lineage schema loaded (`database/lineage_schema.sql`)
+- [ ] Database user has proper permissions
+
+**Backend Setup:**
+- [ ] Virtual environment created
+- [ ] Dependencies installed (`pip install -r requirements.txt`)
+- [ ] Gunicorn installed for production
+- [ ] `backend/.env` file created with correct values
+- [ ] Backend can connect to MySQL
+- [ ] Backend starts without errors
+
+**Airflow Setup:**
+- [ ] Virtual environment created
+- [ ] Dependencies installed (`pip install -r requirements.txt`)
+- [ ] Airflow database initialized (`airflow db init`)
+- [ ] Airflow admin user created
+- [ ] `airflow/.env` file created
+- [ ] `airflow/airflow.cfg` configured (MySQL connection, base_url, secret_key)
+- [ ] Airflow webserver starts
+- [ ] Airflow scheduler starts
+- [ ] DAGs are visible in Airflow UI and not paused
+
+**Frontend Setup:**
+- [ ] Node.js dependencies installed (`npm install`)
+- [ ] `frontend/.env` file created with correct API URL
+- [ ] Frontend builds without errors (`npm run build`)
+- [ ] Frontend dev server starts (`npm run dev`)
+
+**Azure Configuration:**
+- [ ] Service Principal created (if using SP auth)
+- [ ] RBAC roles assigned to Service Principal:
+  - [ ] Storage Blob Data Reader
+  - [ ] Storage Queue Data Reader
+  - [ ] Storage Table Data Reader
+  - [ ] Storage File Data SMB Share Reader
+- [ ] OR Connection String obtained (if using connection string auth)
+- [ ] Test connection successful
+
+**Production Deployment (if using Nginx):**
+- [ ] Nginx installed
+- [ ] SSL certificates generated/obtained
+- [ ] Nginx configuration created
+- [ ] SELinux configured (if applicable)
+- [ ] Firewall rules configured (ports 80, 443)
+- [ ] All services accessible via Nginx
+
+**Service Management:**
+- [ ] `start_services.sh` script works
+- [ ] All services start successfully
+- [ ] Logs directory exists and is writable
+- [ ] Services restart after reboot (if using systemd)
+
+**Testing:**
+- [ ] Frontend accessible
+- [ ] Backend health check returns 200
+- [ ] Airflow UI accessible
+- [ ] Can create connection
+- [ ] Can test connection
+- [ ] Can discover assets
+- [ ] Refresh button works
+- [ ] Airflow DAGs run successfully
 
 ## Docker Deployment
 
