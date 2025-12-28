@@ -656,6 +656,9 @@ def discover_azure_blobs(**context):
                                             "storage_path": f"file-share://{share_name}/{file_path}",
                                         })
                                         logger.info('FN:discover_azure_blobs file_share_file_discovered:{}'.format(file_path))
+                                except Exception as e:
+                                    logger.error('FN:discover_azure_blobs share_name:{} file_name:{} error:{}'.format(share_name, file_info.get("name", "unknown"), str(e)))
+                                    continue
                             except Exception as e:
                                 logger.error('FN:discover_azure_blobs share_name:{} file_name:{} error:{}'.format(share_name, file_info.get("name", "unknown"), str(e)))
                                 continue
