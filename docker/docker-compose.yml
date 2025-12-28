@@ -102,11 +102,13 @@ services:
     build:
       context: ../frontend
       dockerfile: ../docker/Dockerfile.frontend
+      args:
+        # This is baked into the frontend build at image build-time (Vite).
+        # For local Docker usage, backend is exposed on host port 8099.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8099}
     container_name: torro-frontend
     ports:
       - "5162:80"
-    environment:
-      - VITE_API_BASE_URL=http://localhost:8099
     depends_on:
       - backend
     restart: unless-stopped

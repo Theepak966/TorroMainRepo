@@ -2,6 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Sensible defaults for Docker (these are overridden by docker-compose environment if provided)
+# NOTE: backend/config.py loads .env but does NOT override existing environment variables, so
+# these ENV defaults prevent accidental fallback to localhost when users run the container directly.
+ENV FLASK_ENV=production \
+    FLASK_HOST=0.0.0.0 \
+    FLASK_PORT=8099 \
+    DB_HOST=mysql \
+    DB_PORT=3306 \
+    DB_USER=root \
+    DB_NAME=torroforexcel
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
