@@ -25,10 +25,13 @@ try:
     from backend.database import SessionLocal
     from backend.models import Connection, Asset
     from dotenv import load_dotenv
+    from pathlib import Path
     import os as os_module
     
-    # Load environment variables
-    load_dotenv()
+    # Load .env from backend directory
+    backend_dir = Path(__file__).parent
+    env_path = backend_dir / '.env'
+    load_dotenv(env_path)
     
     # Get DB config from environment
     DB_CONFIG = {

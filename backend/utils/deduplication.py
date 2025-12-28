@@ -22,7 +22,13 @@ except ImportError:
     # Fallback if config not available
     import os
     from dotenv import load_dotenv
-    load_dotenv()
+    from pathlib import Path
+    
+    # Load .env from backend directory
+    backend_dir = Path(__file__).parent.parent
+    env_path = backend_dir / '.env'
+    load_dotenv(env_path)
+    
     DB_CONFIG = {
         'host': os.getenv('DB_HOST', 'localhost'),
         'port': int(os.getenv('DB_PORT', 3306)),

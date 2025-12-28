@@ -7,7 +7,9 @@ from urllib.parse import quote_plus
 from dotenv import load_dotenv
 from pathlib import Path
 
-env_path = Path(__file__).parent.parent / '.env'
+# Load .env from backend directory (not root directory)
+backend_dir = Path(__file__).parent
+env_path = backend_dir / '.env'
 load_dotenv(env_path)
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
