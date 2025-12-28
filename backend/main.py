@@ -2003,12 +2003,16 @@ def discover_assets(connection_id):
                                 
                                 # Build asset data
                                 storage_path_for_check = f"file-share://{share_name}/{file_path}"
+                                # Generate consistent asset ID (without timestamp for deduplication)
+                                normalized_path = file_path.strip('/').replace('/', '_').replace(' ', '_')
+                                asset_id = f"azure_file_{connection.name}_{share_name}_{normalized_path}"
+                                
                                 asset_data = {
+                                    "id": asset_id,
                                     "name": file_info.get("name", "unknown"),
                                     "type": "file",
                                     "catalog": "azure_file_share",
                                     "connector_id": connector_id,
-                                    "storage_location": storage_path_for_check,
                                     "columns": [],
                                     "business_metadata": build_business_metadata(file_info, {}, file_extension, share_name),
                                     "technical_metadata": {
@@ -2027,18 +2031,17 @@ def discover_assets(connection_id):
                                     # Update existing asset
                                     existing_asset.business_metadata = asset_data["business_metadata"]
                                     existing_asset.technical_metadata = asset_data["technical_metadata"]
-                                    existing_asset.storage_location = asset_data["storage_location"]
                                     db.commit()
                                     updated_count += 1
                                 else:
-                                    # Create new asset
+                                    # Create new asset (storage_location is NOT part of Asset model)
                                     asset = Asset(**asset_data)
                                     db.add(asset)
                                     db.flush()
                                     
                                     discovery = DataDiscovery(
                                         asset_id=asset.id,
-                                        storage_location=asset_data["storage_location"],
+                                        storage_location={"type": "azure_file_share", "path": storage_path_for_check},
                                         file_metadata={},
                                         schema_json=[],
                                         schema_hash="",
