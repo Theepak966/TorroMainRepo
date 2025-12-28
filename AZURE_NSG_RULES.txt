@@ -1,0 +1,52 @@
+═══════════════════════════════════════════════════════════
+  AZURE NSG INBOUND RULES - REQUIRED PORTS
+═══════════════════════════════════════════════════════════
+
+You need to add these TWO inbound security rules to your Azure NSG:
+
+═══════════════════════════════════════════════════════════
+  RULE 1: HTTPS (Port 443)
+═══════════════════════════════════════════════════════════
+
+Source:                    Any
+Source port ranges:        *
+Destination:               Any
+Service:                   Custom
+Destination port ranges:   443
+Protocol:                  TCP
+Action:                    Allow
+Priority:                  310
+Name:                      AllowHTTPS
+Description:               Allow HTTPS traffic for Nginx reverse proxy
+
+═══════════════════════════════════════════════════════════
+  RULE 2: HTTP (Port 80)
+═══════════════════════════════════════════════════════════
+
+Source:                    Any
+Source port ranges:        *
+Destination:               Any
+Service:                   Custom
+Destination port ranges:   80
+Protocol:                  TCP
+Action:                    Allow
+Priority:                  311
+Name:                      AllowHTTP
+Description:               Allow HTTP traffic (redirects to HTTPS)
+
+═══════════════════════════════════════════════════════════
+  IMPORTANT NOTES
+═══════════════════════════════════════════════════════════
+
+✅ DO NOT open ports 5162, 8099, or 8080 directly
+   - These are internal ports only
+   - Nginx handles all external traffic on 80/443
+
+✅ Access your services via:
+   - https://74.225.20.170/airflow-fe/ (Frontend)
+   - https://74.225.20.170/airflow-be/api/health (Backend)
+   - https://74.225.20.170/airflow/health (Airflow)
+
+✅ HTTP (port 80) automatically redirects to HTTPS (port 443)
+
+═══════════════════════════════════════════════════════════

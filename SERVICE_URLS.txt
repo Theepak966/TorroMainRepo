@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════════════
+  🌐 TORRO APPLICATION - SERVICE URLs
+═══════════════════════════════════════════════════════════
+
+Public IP: 74.225.20.170
+Internal IP: 10.0.0.5
+
+═══════════════════════════════════════════════════════════
+  SERVICE ENDPOINTS
+═══════════════════════════════════════════════════════════
+
+📱 Frontend (Port 5162):
+   https://74.225.20.170/airflow-fe/
+   https://10.0.0.5/airflow-fe/
+
+🔧 Backend API (Port 8099):
+   https://74.225.20.170/airflow-be/api/health
+   https://10.0.0.5/airflow-be/api/health
+
+✈️  Airflow (Port 8080):
+   https://74.225.20.170/airflow/health
+   https://10.0.0.5/airflow/health
+   https://74.225.20.170/airflow/ (UI)
+   https://10.0.0.5/airflow/ (UI)
+
+═══════════════════════════════════════════════════════════
+  CONFIGURATION STATUS
+═══════════════════════════════════════════════════════════
+
+✅ Nginx reverse proxy: ACTIVE
+✅ HTTPS/SSL: ENABLED
+✅ HTTP to HTTPS redirect: ENABLED
+✅ Firewall ports: OPEN (80, 443, 5162, 8099, 8080)
+✅ SELinux: CONFIGURED (httpd_can_network_connect=on)
+✅ All services: RUNNING
+
+═══════════════════════════════════════════════════════════
+  NOTES
+═══════════════════════════════════════════════════════════
+
+- All services are accessible via HTTPS on port 443
+- HTTP requests automatically redirect to HTTPS
+- If external access fails, check Azure NSG rules:
+  * Inbound rule for port 443 (HTTPS)
+  * Inbound rule for port 80 (HTTP redirect)
+
+═══════════════════════════════════════════════════════════

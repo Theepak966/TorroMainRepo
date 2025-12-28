@@ -1,12 +1,21 @@
 # Torro Data Discovery Platform
 
-A comprehensive data discovery and governance platform for Azure Blob Storage and Azure Data Lake Gen2, featuring automated metadata extraction, PII detection, approval workflows, and data lineage tracking.
+A comprehensive data discovery and governance platform for Azure Storage services, featuring automated metadata extraction, PII detection, approval workflows, and data lineage tracking.
 
 ## 🚀 Features
 
-- **Azure Blob Storage & Data Lake Gen2 Support**: Discover and catalog files from both Azure Blob Storage and Azure Data Lake Gen2 (ABFS)
-- **Service Principal Authentication**: Secure authentication using Azure Service Principal credentials
-- **Automated Discovery**: Airflow-powered scheduled discovery of new assets
+- **Complete Azure Storage Support**: Discover and catalog assets from:
+  - Azure Blob Storage (containers and blobs)
+  - Azure Data Lake Gen2 (ABFS paths)
+  - Azure File Shares (file shares and files)
+  - Azure Queues (queue storage)
+  - Azure Tables (table storage)
+- **Multiple Authentication Methods**: 
+  - Connection String authentication
+  - Service Principal authentication
+- **Immediate & Scheduled Discovery**: 
+  - Manual refresh button for immediate discovery
+  - Airflow-powered scheduled discovery of new assets
 - **Complete Metadata Extraction**: Extracts schema, columns, file properties, and PII detection for all file types
 - **Approval Workflow**: Approve, reject, and publish discovered assets with full audit trail
 - **Data Lineage**: Track relationships between data assets
@@ -19,8 +28,9 @@ A comprehensive data discovery and governance platform for Azure Blob Storage an
 - Node.js 16+
 - MySQL 8.0+
 - Apache Airflow 2.7.0
-- Azure Storage Account with Data Lake Gen2 enabled
-- Azure Service Principal with **Storage Blob Data Reader** role
+- Azure Storage Account (Blob Storage, File Shares, Queues, Tables)
+- Azure Service Principal with **Storage Blob Data Reader** role (for Service Principal auth)
+- OR Azure Storage Account connection string (for Connection String auth)
 
 ## 🏗️ Architecture
 
@@ -178,9 +188,20 @@ Access services:
 
 ## 🔐 Azure Configuration
 
-### Service Principal Setup
+### Authentication Methods
 
-The platform uses **hardcoded Service Principal credentials** in the frontend for bank deployment. These are configured in `frontend/src/pages/ConnectorsPage.jsx`:
+The platform supports two authentication methods:
+
+#### 1. Connection String Authentication
+
+Use your Azure Storage Account connection string:
+```
+DefaultEndpointsProtocol=https;AccountName=<account-name>;AccountKey=<account-key>;EndpointSuffix=core.windows.net
+```
+
+#### 2. Service Principal Authentication
+
+The platform can use **hardcoded Service Principal credentials** in the frontend for bank deployment. These are configured in `frontend/src/pages/ConnectorsPage.jsx`:
 
 ```javascript
 const HARDCODED_AZURE_CREDENTIALS = {
@@ -194,10 +215,25 @@ const HARDCODED_AZURE_CREDENTIALS = {
 
 ### Required Azure Permissions
 
-The Service Principal must have:
+For Service Principal authentication, the Service Principal must have:
 - **Storage Blob Data Reader** role (read-only access)
+- **Storage Queue Data Reader** role (for queue discovery)
+- **Storage Table Data Reader** role (for table discovery)
+- **Storage File Data SMB Share Reader** role (for file share discovery)
 - Assigned at the Storage Account level
 - For Data Lake Gen2, ensure ACLs grant Execute (X) on parent directories and Read (R) on files
+
+For Connection String authentication, the connection string must have read permissions for all storage services.
+
+### Supported Azure Storage Services
+
+The platform discovers assets from:
+
+1. **Azure Blob Storage**: Containers and blobs
+2. **Azure Data Lake Gen2**: ABFS paths (e.g., `abfs://<container>@<account>.dfs.core.windows.net/<path>`)
+3. **Azure File Shares**: File shares and files
+4. **Azure Queues**: Queue storage
+5. **Azure Tables**: Table storage
 
 ### Data Lake Gen2 Path Format
 
@@ -235,9 +271,9 @@ abfs://lh-enriched@hblazlakehousepreprdstg1.dfs.core.windows.net/visionplus/ATH3
 - `PUT /api/connections/<id>` - Update connection
 - `DELETE /api/connections/<id>` - Delete connection
 - `POST /api/connections/test-config` - Test connection without saving
-- `GET /api/connections/<id>/containers` - List containers
-- `GET /api/connections/<id>/list-files` - List files in container/path
-- `POST /api/connections/<id>/discover` - Discover assets
+- `GET /api/connections/<id>/containers` - List containers, file shares, queues, and tables
+- `GET /api/connections/<id>/list-files` - List files in container/path or file share
+- `POST /api/connections/<id>/discover` - Discover assets (immediate discovery)
 
 ### Assets
 - `GET /api/assets` - List all assets
@@ -252,7 +288,7 @@ abfs://lh-enriched@hblazlakehousepreprdstg1.dfs.core.windows.net/visionplus/ATH3
 - `GET /api/discovery/<id>` - Get discovery by ID
 - `PUT /api/discovery/<id>/approve` - Approve discovery
 - `PUT /api/discovery/<id>/reject` - Reject discovery
-- `POST /api/discovery/trigger` - Trigger Airflow DAG manually
+- `POST /api/discovery/trigger` - Trigger Airflow DAG manually (background discovery)
 - `GET /api/discovery/stats` - Get discovery statistics
 
 ### Health
@@ -360,6 +396,13 @@ Set environment variables in `docker-compose.yml` or use `.env` files in respect
 - Check database connection pool settings
 - Monitor Airflow scheduler logs
 
+### Refresh Button Not Working
+
+- Verify backend API is accessible
+- Check browser console for errors
+- Ensure all connections are active
+- Try manual discovery via API: `POST /api/connections/<id>/discover`
+
 ## 📝 File Structure
 
 ```
@@ -385,11 +428,27 @@ torroforazure/
 
 ## 🔒 Security Notes
 
-- Service Principal credentials are hardcoded in frontend (bank requirement)
-- All Azure operations are read-only (Storage Blob Data Reader)
+- Service Principal credentials can be hardcoded in frontend (bank requirement) OR use Connection String
+- All Azure operations are read-only (Storage Blob Data Reader, Queue Data Reader, Table Data Reader, File Data Reader)
 - Database credentials stored in environment variables
-- No credentials in code (except Service Principal in frontend)
+- Connection strings stored securely in database (encrypted at rest)
 - All API calls use HTTPS for Azure operations
+
+## 🔄 Discovery Methods
+
+### Immediate Discovery (Refresh Button)
+
+Click the "Refresh" button in the UI to:
+- Discover all new files immediately
+- Update existing assets if schema changed
+- Show results in real-time
+
+### Scheduled Discovery (Airflow DAG)
+
+The Airflow DAG runs automatically on schedule:
+- Discovers new assets in the background
+- Updates the database when complete
+- Can be triggered manually via API
 
 ## 📈 Monitoring
 
