@@ -134,8 +134,20 @@ def run_discovery_for_connection(connection_id: int):
                                 # Check if asset exists (deduplication)
                                 existing_record = None
                                 try:
-                                    # check_asset_exists already has retry decorator
-                                    existing_record = check_asset_exists(connector_id, blob_path)
+                                    # Use database session for check_asset_exists
+                                    db_session = SessionLocal()
+                                    try:
+                                        existing_asset = check_asset_exists(db_session, connector_id, blob_path)
+                                        if existing_asset:
+                                            # Convert Asset object to dict format expected by should_update_or_insert
+                                            tech_meta = existing_asset.technical_metadata or {}
+                                            existing_record = {
+                                                "id": existing_asset.id,
+                                                "file_hash": tech_meta.get("file_hash") or tech_meta.get("hash", {}).get("value") if isinstance(tech_meta.get("hash"), dict) else None,
+                                                "schema_hash": tech_meta.get("schema_hash")
+                                            }
+                                    finally:
+                                        db_session.close()
                                 except Exception as e:
                                     logger.warning('FN:run_discovery_for_connection blob_path:{} message:Error checking asset existence treating as new error:{}'.format(blob_path, str(e)))
                                     existing_record = None
