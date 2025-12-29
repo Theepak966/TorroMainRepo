@@ -1013,6 +1013,40 @@ const AssetsPage = () => {
                     const etag = technicalMetadata.etag || 'N/A';
                     const contentType = technicalMetadata.content_type || 'N/A';
                     
+                    // Get meaningful storage type (not file format, since Format field shows that)
+                    let storageType = 'Data File'; // Default fallback
+                    
+                    // Try to get from storage_location (from discovery, available in asset API response)
+                    const storageLocation = selectedAsset?.storage_location || technicalMetadata.storage_location || {};
+                    const storageLocationType = storageLocation.type;
+                    
+                    // Or try to infer from connector_id
+                    const connectorId = selectedAsset?.connector_id || '';
+                    
+                    // Determine storage type
+                    if (storageLocationType) {
+                        // Map storage location types to user-friendly names
+                        const typeMap = {
+                            'azure_blob': 'Azure Blob Storage',
+                            'azure_file_share': 'Azure File Share',
+                            'azure_queue': 'Azure Queue',
+                            'azure_table': 'Azure Table',
+                            'blob_container': 'Blob Container'
+                        };
+                        storageType = typeMap[storageLocationType] || storageLocationType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    } else if (connectorId) {
+                        // Parse connector_id format: azure_blob_{name}, azure_file_share_{name}, etc.
+                        if (connectorId.startsWith('azure_blob')) {
+                            storageType = 'Azure Blob Storage';
+                        } else if (connectorId.startsWith('azure_file_share')) {
+                            storageType = 'Azure File Share';
+                        } else if (connectorId.startsWith('azure_queue')) {
+                            storageType = 'Azure Queue';
+                        } else if (connectorId.startsWith('azure_table')) {
+                            storageType = 'Azure Table';
+                        }
+                    }
+                    
                     return (
                       <Grid container spacing={2}>
                         <Grid item xs={6}>
@@ -1060,7 +1094,7 @@ const AssetsPage = () => {
                                 Type
                               </Typography>
                               <Typography variant="body1">
-                                {blobType}
+                                {storageType}
                               </Typography>
                             </CardContent>
                           </Card>

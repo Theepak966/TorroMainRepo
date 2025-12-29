@@ -339,7 +339,55 @@ const ConnectorsPage = () => {
           }),
         });
         
-        const testData = await testResponse.json();
+        // Check if response is OK and is JSON
+        if (!testResponse.ok) {
+          const contentType = testResponse.headers.get('content-type');
+          let errorMessage = `Server returned ${testResponse.status} ${testResponse.statusText}`;
+          
+          if (contentType && contentType.includes('application/json')) {
+            try {
+              const errorData = await testResponse.json();
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } catch (e) {
+              // If JSON parsing fails, use default message
+            }
+          } else {
+            // Response is not JSON (likely HTML error page)
+            const textResponse = await testResponse.text();
+            errorMessage = `Backend error: ${testResponse.status}. Please check if the backend service is running.`;
+          }
+          
+          setTestResult({
+            success: false,
+            message: errorMessage,
+          });
+          return;
+        }
+        
+        // Check content-type before parsing JSON
+        const contentType = testResponse.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          const textResponse = await testResponse.text();
+          setTestResult({
+            success: false,
+            message: `Invalid response format. Expected JSON but received ${contentType || 'unknown'}. Please check if the backend service is running correctly.`,
+          });
+          return;
+        }
+        
+        // Safely parse JSON with error handling
+        let testData;
+        try {
+          testData = await testResponse.json();
+        } catch (jsonError) {
+          // If JSON parsing fails even after content-type check, it's likely HTML
+          const textResponse = await testResponse.text();
+          setTestResult({
+            success: false,
+            message: `Failed to parse response as JSON. The backend may be returning an error page. Please check if the backend service is running on port 8099. Error: ${jsonError.message}`,
+          });
+          return;
+        }
         
         if (!testData.success) {
           // Test failed - don't save anything
@@ -525,10 +573,22 @@ const ConnectorsPage = () => {
           }
         }
       } catch (error) {
-      setTestResult({ 
-        success: false, 
-          message: error.message || 'Failed to test connection',
-      });
+        // Handle network errors, JSON parse errors, etc.
+        let errorMessage = 'Failed to test connection';
+        
+        if (error.message) {
+          // Check if it's a JSON parse error
+          if (error.message.includes('JSON') || error.message.includes('unexpected token')) {
+            errorMessage = `Backend returned invalid response. Please check if the backend service is running on port 8099. Error: ${error.message}`;
+          } else {
+            errorMessage = error.message;
+          }
+        }
+        
+        setTestResult({ 
+          success: false, 
+          message: errorMessage,
+        });
       } finally {
       setTesting(false);
     }
