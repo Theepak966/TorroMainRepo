@@ -152,5 +152,8 @@ def run_discovery_for_connection(connection_id: int):
             finally:
                 if db:
                     db.close()
-                if conn:
-                    conn.close()
+    except Exception as e:
+        logger.error(f'FN:run_discovery_for_connection connection_id:{connection_id} error:{str(e)}', exc_info=True)
+    finally:
+        if conn:
+            conn.close()
