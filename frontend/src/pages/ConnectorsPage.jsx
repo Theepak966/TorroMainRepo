@@ -361,6 +361,7 @@ const ConnectorsPage = () => {
             success: false,
             message: errorMessage,
           });
+          setTesting(false);
           return;
         }
         
@@ -372,6 +373,7 @@ const ConnectorsPage = () => {
             success: false,
             message: `Invalid response format. Expected JSON but received ${contentType || 'unknown'}. Please check if the backend service is running correctly.`,
           });
+          setTesting(false);
           return;
         }
         
@@ -395,6 +397,7 @@ const ConnectorsPage = () => {
             success: false,
             message: testData.message || 'Connection test failed',
           });
+          setTesting(false);
           return;
         }
         
@@ -473,10 +476,10 @@ const ConnectorsPage = () => {
             try {
               
               const response = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover-stream`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
                 body: JSON.stringify({
                   containers: containerNames,
                   folder_path: config.folder_path || '',
@@ -496,6 +499,7 @@ const ConnectorsPage = () => {
               let totalSkipped = 0;
               let currentContainer = null;
               let fileCount = 0;
+              let actualContainersProcessed = new Set(); // Track actual containers processed
               
               while (true) {
                 const { done, value } = await reader.read();
@@ -514,6 +518,7 @@ const ConnectorsPage = () => {
                         setDiscoveryProgress(prev => [...prev, data.message]);
                       } else if (data.type === 'container') {
                         currentContainer = data.container;
+                        actualContainersProcessed.add(data.container); // Track container
                         setDiscoveryProgress(prev => [...prev, `[CONTAINER] ${data.container}`]);
                       } else if (data.type === 'file') {
                         fileCount++;
@@ -540,12 +545,13 @@ const ConnectorsPage = () => {
                           body: JSON.stringify({
                             containers: containerNames,
                             folder_path: config.folder_path || '',
+                            skip_deduplication: true,  // Skip deduplication for test discoveries
                           }),
                         })
                         .then(res => {
                           if (!res.ok) {
                             return res.json().then(err => Promise.reject(new Error(err.error || `HTTP ${res.status}: ${res.statusText}`)));
-                          }
+                    }
                           return res.json();
                         })
                         .then(discoveryResult => {
@@ -563,38 +569,50 @@ const ConnectorsPage = () => {
                             setDiscoveryProgress(prev => [...prev, `No new assets to save`]);
                           }
                           
-                          setTestResult({
-                            success: true,
+                          // Use actual containers processed, not the initial container count
+                          const actualContainerCount = actualContainersProcessed.size || 1;
+                          
+          setTestResult({
+            success: true,
                             message: total > 0 
-                              ? `Connection successful! Discovered ${total} assets in ${testData.container_count} container(s)`
+                              ? `Connection successful! Discovered ${total} assets in ${actualContainerCount} container(s)`
                               : skipped > 0
                                 ? `Connection successful! All ${skipped} assets already exist (no new assets)`
                                 : `Connection successful! No assets found`,
                             discoveredAssets: total,
-                            totalContainers: testData.container_count,
-                            connectionId: connection.id,
-                            containers: containersData.containers || [],
-                          });
+                            totalContainers: actualContainerCount,
+                  connectionId: connection.id,
+                  containers: containersData.containers || [],
+                });
+                          
+                          // Set testing to false only after everything is complete
+                          setTesting(false);
                         })
                         .catch(err => {
                           setDiscoveryProgress(prev => [...prev, `Error saving assets: ${err.message}`]);
-                          setTestResult({
-                            success: true,
+                          const actualContainerCount = actualContainersProcessed.size || 1;
+                setTestResult({
+                  success: true,
                             message: `Connection successful! Found ${totalDiscovered} files but error saving: ${err.message}`,
                             discoveredAssets: 0,
-                            totalContainers: testData.container_count,
-                            connectionId: connection.id,
-                            containers: containersData.containers || [],
-                          });
+                            totalContainers: actualContainerCount,
+                  connectionId: connection.id,
+                  containers: containersData.containers || [],
+                });
+                          
+                          // Set testing to false even on error
+                          setTesting(false);
                         });
                       } else if (data.type === 'error') {
                         setDiscoveryProgress(prev => [...prev, `Error: ${data.message}`]);
+                        const actualContainerCount = actualContainersProcessed.size || 1;
                         setTestResult({
                           success: false,
                           message: `Discovery error: ${data.message}`,
                           discoveredAssets: totalDiscovered,
-                          totalContainers: testData.container_count,
+                          totalContainers: actualContainerCount,
                         });
+                        setTesting(false);
                         return;
                       } else if (data.type === 'warning') {
                         setDiscoveryProgress(prev => [...prev, `Warning: ${data.message}`]);
@@ -609,14 +627,16 @@ const ConnectorsPage = () => {
             } catch (discoverError) {
               setDiscoveryProgress(prev => [...prev, `Discovery error: ${discoverError.message}`]);
               console.error(`FN:handleTestConnection message:Discovery error error:${discoverError.message || discoverError}`);
+              const actualContainerCount = actualContainersProcessed.size || 1;
           setTestResult({
             success: true,
-                message: `Connection successful! Found ${testData.container_count} container(s). Discovery error: ${discoverError.message}`,
+                message: `Connection successful! Found ${actualContainerCount} container(s). Discovery error: ${discoverError.message}`,
                 discoveredAssets: 0,
-                totalContainers: testData.container_count,
+                totalContainers: actualContainerCount,
                 connectionId: connection.id,
                 containers: containersData.containers || [],
               });
+              setTesting(false);
             }
           } else {
             setTestResult({
@@ -627,6 +647,7 @@ const ConnectorsPage = () => {
               connectionId: connection.id,
               containers: containersData.containers || [],
             });
+            setTesting(false);
           }
         }
       } catch (error) {
@@ -646,7 +667,6 @@ const ConnectorsPage = () => {
           success: false, 
           message: errorMessage,
         });
-      } finally {
       setTesting(false);
     }
     } else {

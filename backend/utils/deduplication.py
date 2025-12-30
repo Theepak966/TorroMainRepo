@@ -152,8 +152,10 @@ def check_file_exists(
                   AND storage_identifier = %s
                   AND storage_path = %s
                 LIMIT 1
-    Determine if we should insert/update a record.
-    Returns: (should_insert_or_update, schema_changed)
-    - Only update full record if schema actually changed, not for metadata-only updates
-    - For new records, always insert
-    - For existing records with only file_hash change, just update last_checked_at (not full record)
+            """
+            cursor.execute(sql, (storage_type, storage_identifier, storage_path))
+            result = cursor.fetchone()
+            return result
+    finally:
+        if conn:
+            conn.close()

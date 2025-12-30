@@ -52,7 +52,6 @@ const AssetsPage = () => {
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [discoveryIdSearch, setDiscoveryIdSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [catalogFilter, setCatalogFilter] = useState('');
   const [approvalStatusFilter, setApprovalStatusFilter] = useState('');
@@ -82,24 +81,49 @@ const AssetsPage = () => {
 
   useEffect(() => {
     fetchAssets();
-  }, [currentPage, pageSize, searchTerm, discoveryIdSearch, typeFilter, catalogFilter, approvalStatusFilter]);
+  }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter, approvalStatusFilter]);
 
   const fetchAssets = async (pageOverride = null) => {
       setLoading(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       
-      const url = discoveryIdSearch 
-        ? `${API_BASE_URL}/api/assets?discovery_id=${discoveryIdSearch}`
-        : `${API_BASE_URL}/api/assets`;
+      const page = pageOverride !== null ? pageOverride : currentPage;
+      const pageParam = page + 1; // Backend uses 1-based pagination
+      
+      const url = `${API_BASE_URL}/api/assets?page=${pageParam}&per_page=${pageSize}`;
+      
       const response = await fetch(url);
       if (response.ok) {
-      const data = await response.json();
-        setAllAssets(data);
-        setTotalAssets(data.length);
+        const data = await response.json();
         
+        // Handle both old format (array) and new format (paginated object)
+        let assetsList = [];
+        let total = 0;
+        let totalPagesCount = 0;
         
-        let filtered = data;
+        if (Array.isArray(data)) {
+          // Old format - backward compatibility
+          assetsList = data;
+          total = data.length;
+          totalPagesCount = Math.ceil(data.length / pageSize);
+        } else if (data.assets && data.pagination) {
+          // New paginated format
+          assetsList = data.assets;
+          total = data.pagination.total;
+          totalPagesCount = data.pagination.total_pages;
+        } else {
+          assetsList = [];
+          total = 0;
+          totalPagesCount = 0;
+        }
+        
+        setAllAssets(assetsList);
+        setTotalAssets(total);
+        setTotalPages(totalPagesCount);
+        
+        // Client-side filtering (if needed for search/filters)
+        let filtered = assetsList;
         if (searchTerm) {
           filtered = filtered.filter(asset => 
             asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -119,12 +143,7 @@ const AssetsPage = () => {
           });
         }
         
-        
-        const page = pageOverride !== null ? pageOverride : currentPage;
-        const start = page * pageSize;
-        const end = start + pageSize;
-        setAssets(filtered.slice(start, end));
-        setTotalPages(Math.ceil(filtered.length / pageSize));
+        setAssets(filtered);
         } else {
         setAssets([]);
         setTotalAssets(0);
@@ -402,50 +421,42 @@ const AssetsPage = () => {
   };
 
   const handleViewAsset = async (assetId) => {
+    // OPTIMIZED: First check if asset is already in state (instant - no API call)
+    const cachedAsset = allAssets.find(a => a.id === assetId);
     
+    if (cachedAsset) {
+      // Asset already loaded - use it directly (instant!)
+      setSelectedAsset(cachedAsset);
+      setDetailsDialogOpen(true);
+      setOriginalClassification(cachedAsset.business_metadata?.classification || 'internal');
+      setOriginalSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+      setClassification(cachedAsset.business_metadata?.classification || 'internal');
+      setSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+      return; // Exit early - no API call needed!
+    }
+    
+    // Only fetch if asset not in state (rare case - asset not loaded yet)
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets`);
+      // OPTIMIZED: Fetch only the specific asset, not all assets
+      const response = await fetch(`${API_BASE_URL}/api/assets/${assetId}`);
       if (response.ok) {
-        const allAssetsData = await response.json();
-        const asset = allAssetsData.find(a => a.id === assetId);
-        if (asset) {
-          
-          setAllAssets(allAssetsData);
-          setSelectedAsset(asset);
-      setDetailsDialogOpen(true);
-          setOriginalClassification(asset.business_metadata?.classification || 'internal');
-          setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-          setClassification(asset.business_metadata?.classification || 'internal');
-          setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-        }
-      } else {
-        
-        const asset = allAssets.find(a => a.id === assetId);
-        if (asset) {
-          setSelectedAsset(asset);
-          setDetailsDialogOpen(true);
-          setOriginalClassification(asset.business_metadata?.classification || 'internal');
-          setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-          setClassification(asset.business_metadata?.classification || 'internal');
-          setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-        }
-      }
-    } catch (error) {
-      
-      if (import.meta.env.DEV) {
-        console.error('Error fetching asset:', error);
-      }
-      
-      const asset = allAssets.find(a => a.id === assetId);
-      if (asset) {
+        const asset = await response.json();
         setSelectedAsset(asset);
         setDetailsDialogOpen(true);
         setOriginalClassification(asset.business_metadata?.classification || 'internal');
         setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
         setClassification(asset.business_metadata?.classification || 'internal');
         setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+      } else {
+        const errorData = await response.json();
+        alert(`Failed to load asset: ${errorData.error || 'Asset not found'}`);
       }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error('Error fetching asset:', error);
+      }
+      alert('Failed to load asset details. Please try again.');
     }
   };
 
@@ -533,11 +544,6 @@ const AssetsPage = () => {
 
   const handleApprovalStatusFilterChange = (event) => {
     setApprovalStatusFilter(event.target.value);
-    setCurrentPage(0);
-  };
-
-  const handleDiscoveryIdSearchChange = (event) => {
-    setDiscoveryIdSearch(event.target.value);
     setCurrentPage(0);
   };
 
@@ -683,22 +689,6 @@ const AssetsPage = () => {
                 />
             </Grid>
             <Grid item xs={12} md={2}>
-                <TextField
-                  fullWidth
-                  placeholder="Search by Discovery ID..."
-                  value={discoveryIdSearch}
-                  onChange={handleDiscoveryIdSearchChange}
-                  type="number"
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <Search />
-                      </InputAdornment>
-                    ),
-                  }}
-                />
-            </Grid>
-            <Grid item xs={12} md={2}>
               <FormControl fullWidth>
                 <InputLabel id="type-filter-label" shrink>Type</InputLabel>
                 <Select
@@ -780,7 +770,6 @@ const AssetsPage = () => {
                 startIcon={<FilterList />}
                 onClick={() => {
                   setSearchTerm('');
-                  setDiscoveryIdSearch('');
                   setTypeFilter('');
                   setCatalogFilter('');
                   setApprovalStatusFilter('');
@@ -849,9 +838,16 @@ const AssetsPage = () => {
                       />
                     </TableCell>
                     <TableCell>
-                      <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'Roboto' }}>
-                        {new Date(asset.discovered_at).toLocaleDateString()}
-                      </Typography>
+                      <Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'Roboto' }}>
+                          {new Date(asset.discovered_at).toLocaleDateString()}
+                        </Typography>
+                        {asset.discovery_id && (
+                          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'Roboto', fontSize: '0.75rem', opacity: 0.7 }}>
+                            ID: {asset.discovery_id}
+                          </Typography>
+                        )}
+                      </Box>
                     </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>

@@ -318,45 +318,39 @@ def delete_connection(connection_id):
         if not connection:
             return jsonify({"error": "Connection not found"}), 404
 
-
-
+        # Build connector_id pattern
         if connection.connector_type == 'azure_blob':
             connector_id_pattern = f"azure_blob_{connection.name}"
         else:
             connector_id_pattern = f"{connection.connector_type}_{connection.name}"
         
-
-        associated_assets = db.query(Asset).filter(Asset.connector_id == connector_id_pattern).all()
-        asset_ids = [asset.id for asset in associated_assets]
-
-
-
-        if asset_ids:
-
-            lineage_relationships = db.query(LineageRelationship).filter(
-                (LineageRelationship.source_asset_id.in_(asset_ids)) |
-                (LineageRelationship.target_asset_id.in_(asset_ids))
-            ).all()
-            for rel in lineage_relationships:
-                db.delete(rel)
-            logger.debug('FN:delete_connection connection_id:{} deleted_lineage_relationships:{}'.format(connection_id, len(lineage_relationships)))
-
-
-        deleted_count = len(associated_assets)
-        for asset in associated_assets:
-            db.delete(asset)
-            logger.debug('FN:delete_connection connection_id:{} asset_id:{} asset_name:{} message:Deleting asset'.format(connection_id, asset.id, asset.name))
-
-
+        # OPTIMIZED: Get count first (for response), then use bulk delete
+        asset_count = db.query(Asset).filter(Asset.connector_id == connector_id_pattern).count()
+        
+        # OPTIMIZED: Use bulk delete instead of loading all assets into memory
+        # Lineage relationships will be automatically deleted via CASCADE
+        # DataDiscovery records will also be automatically deleted via CASCADE
+        # LineageHistory will be automatically deleted via CASCADE
+        
+        # Delete assets in bulk (much faster than individual deletes)
+        deleted_assets_count = db.query(Asset).filter(
+            Asset.connector_id == connector_id_pattern
+        ).delete(synchronize_session=False)
+        
+        # Delete the connection
         connection_name = connection.name
         db.delete(connection)
+        
+        # Single commit for all deletions
         db.commit()
-
-        logger.info('FN:delete_connection connection_name:{} connection_id:{} deleted_assets_count:{}'.format(connection_name, connection_id, deleted_count))
-
+        
+        logger.info('FN:delete_connection connection_name:{} connection_id:{} deleted_assets_count:{}'.format(
+            connection_name, connection_id, deleted_assets_count
+        ))
+        
         return jsonify({
             "message": "Connection and associated assets deleted successfully",
-            "deleted_assets": deleted_count,
+            "deleted_assets": deleted_assets_count,
             "connection_name": connection_name
         }), 200
     except Exception as e:
@@ -433,12 +427,17 @@ def get_assets():
             else:
                 return jsonify({"error": "No asset linked to this discovery_id"}), 404
         
-
+        # Pagination parameters
+        page = request.args.get('page', type=int, default=1)
+        per_page = min(request.args.get('per_page', type=int, default=100), 500)  # Max 500 per page
+        offset = (page - 1) * per_page
 
         from sqlalchemy import case, func
         
-
-
+        # Get total count first
+        total_count = db.query(Asset).count()
+        
+        # Get latest discovery IDs for all assets (for joining)
         latest_discovery_subq = db.query(
             DataDiscovery.asset_id,
             func.max(DataDiscovery.id).label('latest_discovery_id')
@@ -446,7 +445,7 @@ def get_assets():
             DataDiscovery.asset_id.isnot(None)
         ).group_by(DataDiscovery.asset_id).subquery()
         
-
+        # Get assets with pagination
         assets_with_discovery = db.query(Asset, DataDiscovery).outerjoin(
             latest_discovery_subq, Asset.id == latest_discovery_subq.c.asset_id
         ).outerjoin(
@@ -455,7 +454,7 @@ def get_assets():
             case((DataDiscovery.id.is_(None), 1), else_=0),
             DataDiscovery.id.asc(),
             Asset.discovered_at.desc()
-        ).all()
+        ).limit(per_page).offset(offset).all()
         
         result = []
         seen_asset_ids = set()
@@ -482,7 +481,19 @@ def get_assets():
                 asset_data["discovery_approval_status"] = discovery.approval_status
             result.append(asset_data)
         
-        return jsonify(result)
+        total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 0
+        
+        return jsonify({
+            "assets": result,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        })
     finally:
         db.close()
 
@@ -1244,7 +1255,6 @@ def test_connection_config():
         config_data = {}
         
         if request.method == 'POST':
-
             data = request.json
             if not data:
                 return jsonify({"error": "Request body is required"}), 400
@@ -1588,8 +1598,8 @@ def build_operational_metadata(azure_properties, current_date):
         lease_status = azure_properties.get("lease_status")
         if lease_status and isinstance(lease_status, str):
             lease_status = lease_status.lower()
-            if lease_status == "locked":
-                access_level = "restricted"
+        if lease_status == "locked":
+            access_level = "restricted"
         elif azure_properties.get("access_tier") == "Archive":
             access_level = "archived"
     
@@ -1706,8 +1716,11 @@ def discover_assets_stream(connection_id):
                         working_config['use_dfs_endpoint'] = True
                         working_config['storage_type'] = 'datalake'
                     
-                    if parsed_container and parsed_container not in containers:
+                    # ALWAYS use the container from the URL if it's specified in the path
+                    # This overrides any containers passed from the frontend
+                    if parsed_container:
                         containers = [parsed_container]
+                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Using container from URL: {parsed_container}', 'container': parsed_container})}\n\n"
                     folder_path = parsed_path
                 except Exception as e:
                     yield f"data: {json.dumps({'type': 'warning', 'message': f'Failed to parse storage URL: {str(e)}'})}\n\n"
@@ -1749,6 +1762,11 @@ def discover_assets_stream(connection_id):
                 try:
                     # Discover all files recursively in this container
                     is_datalake = working_config.get('storage_type') == 'datalake' or working_config.get('use_dfs_endpoint', False)
+                    
+                    # Log what we're about to do
+                    path_display = folder_path if folder_path else "root"
+                    yield f"data: {json.dumps({'type': 'progress', 'message': f'Listing files in {container_name} (path: {path_display})...', 'container': container_name})}\n\n"
+                    
                     if is_datalake and hasattr(blob_client, 'list_datalake_files'):
                         blobs = blob_client.list_datalake_files(
                             file_system_name=container_name,
@@ -1786,7 +1804,12 @@ def discover_assets_stream(connection_id):
                         yield f"data: {json.dumps({'type': 'progress', 'message': f'No files found in {container_name}', 'container': container_name})}\n\n"
                     
                 except Exception as e:
-                    yield f"data: {json.dumps({'type': 'error', 'message': f'Error processing container {container_name}: {str(e)}', 'container': container_name})}\n\n"
+                    import traceback
+                    error_details = str(e)
+                    error_trace = traceback.format_exc()
+                    print(f'FN:discover_assets_stream container:{container_name} path:{folder_path} error:{error_details}')
+                    print(f'FN:discover_assets_stream traceback:{error_trace}')
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Error processing container {container_name}: {error_details}', 'container': container_name})}\n\n"
                     continue
             
             yield f"data: {json.dumps({'type': 'complete', 'message': 'Discovery complete', 'discovered': total_discovered, 'updated': total_updated, 'skipped': total_skipped})}\n\n"
@@ -1821,6 +1844,7 @@ def discover_assets(connection_id):
         config_data = connection.config or {}
         containers = data.get('containers', config_data.get('containers', []))
         folder_path = data.get('folder_path', config_data.get('folder_path', ''))
+        skip_deduplication = data.get('skip_deduplication', False)  # Skip deduplication for test discoveries
         
         parsed_container = None
         parsed_path = folder_path
@@ -1850,9 +1874,11 @@ def discover_assets(connection_id):
                     config_data['storage_type'] = 'datalake'
                     logger.info('FN:discover_assets message:Detected Data Lake URL, enabling DFS endpoint')
                 
-                if parsed_container and parsed_container not in containers:
+                # ALWAYS use the container from the URL if it's specified in the path
+                # This overrides any containers passed from the frontend
+                if parsed_container:
                     containers = [parsed_container]
-                    logger.info('FN:discover_assets message:Using container from URL:{}'.format(parsed_container))
+                    logger.info('FN:discover_assets message:Using container from URL:{} (overriding provided containers)'.format(parsed_container))
                 folder_path = parsed_path
             except Exception as e:
                 logger.warning('FN:discover_assets failed_to_parse_storage_url:{} error:{}'.format(folder_path, str(e)))
@@ -1973,11 +1999,10 @@ def discover_assets(connection_id):
 
 
                                 existing_asset = None
-                                if AZURE_AVAILABLE:
-
-
+                                # Skip deduplication for test discoveries (from ConnectorsPage)
+                                # Only do deduplication for refresh operations (from AssetsPage)
+                                if AZURE_AVAILABLE and not skip_deduplication:
                                     try:
-
                                         existing_assets_count = thread_db.query(Asset).filter(
                                             Asset.connector_id == connector_id
                                         ).count()
@@ -1993,23 +2018,25 @@ def discover_assets(connection_id):
                                         logger.error('FN:discover_assets blob_path:{} error:check_asset_exists failed error:{}'.format(blob_path, str(e)))
 
                                         existing_asset = None
+                                elif skip_deduplication:
+                                    logger.debug('FN:discover_assets blob_path:{} message:Skipping deduplication (test discovery)'.format(blob_path))
                                 
 
 
 
-                                azure_properties = {
-                                    "etag": blob_info.get("etag", ""),
-                                    "size": blob_info.get("size", 0),
-                                    "content_type": blob_info.get("content_type", "application/octet-stream"),
-                                    "created_at": blob_info.get("created_at"),
-                                    "last_modified": blob_info.get("last_modified"),
-                                    "access_tier": blob_info.get("access_tier"),
-                                    "lease_status": blob_info.get("lease_status"),
-                                    "content_encoding": blob_info.get("content_encoding"),
-                                    "content_language": blob_info.get("content_language"),
-                                    "cache_control": blob_info.get("cache_control"),
-                                    "metadata": blob_info.get("metadata", {})
-                                }
+                                    azure_properties = {
+                                        "etag": blob_info.get("etag", ""),
+                                        "size": blob_info.get("size", 0),
+                                        "content_type": blob_info.get("content_type", "application/octet-stream"),
+                                        "created_at": blob_info.get("created_at"),
+                                        "last_modified": blob_info.get("last_modified"),
+                                        "access_tier": blob_info.get("access_tier"),
+                                        "lease_status": blob_info.get("lease_status"),
+                                        "content_encoding": blob_info.get("content_encoding"),
+                                        "content_language": blob_info.get("content_language"),
+                                        "cache_control": blob_info.get("cache_control"),
+                                        "metadata": blob_info.get("metadata", {})
+                                    }
                                 
 
 
@@ -2250,7 +2277,7 @@ def discover_assets(connection_id):
             batch_size = int(os.getenv("DISCOVERY_BATCH_SIZE", "1500"))
             total_assets = len(discovered_assets)
             
-            if total_assets > 5000:
+            if total_assets > 1000:
                 logger.info('FN:discover_assets total_assets:{} batch_size:{} message:Large discovery detected'.format(total_assets, batch_size))
             
 
@@ -2263,10 +2290,12 @@ def discover_assets(connection_id):
                 batch_end = min(batch_start + batch_size, total_assets)
                 batch = discovered_assets[batch_start:batch_end]
                 
-                if total_assets > 5000:
-                    batch_num = batch_start//batch_size + 1
-                    total_batches = (total_assets + batch_size - 1)//batch_size
-                    logger.info('FN:discover_assets batch_number:{} total_batches:{} batch_start:{} batch_end:{} total_assets:{}'.format(batch_num, total_batches, batch_start+1, batch_end, total_assets))
+                batch_num = batch_start//batch_size + 1
+                total_batches = (total_assets + batch_size - 1)//batch_size
+                logger.info('FN:discover_assets batch_number:{} total_batches:{} batch_start:{} batch_end:{} total_assets:{}'.format(batch_num, total_batches, batch_start+1, batch_end, total_assets))
+                
+                # Collect discoveries for bulk insert
+                discoveries_to_add = []
                 
                 for item in batch:
                     try:
@@ -2276,14 +2305,18 @@ def discover_assets(connection_id):
                             continue
                         elif item.get("action") == "updated":
 
+                            # OPTIMIZED: Merge updated assets into main session instead of individual commits
                             thread_db = item.get("thread_db")
                             if thread_db:
                                 try:
-                                    thread_db.commit()
+                                    updated_asset = item.get("asset")
+                                    if updated_asset:
+                                        # Merge the object from thread_db into main db session
+                                        # This avoids individual commits and allows batch processing
+                                        db.merge(updated_asset)
                                     updated_count += 1
                                 except Exception as e:
-                                    thread_db.rollback()
-                                    logger.error('FN:discover_assets message:Error committing updated asset error:{}'.format(str(e)), exc_info=True)
+                                    logger.error('FN:discover_assets message:Error merging updated asset error:{}'.format(str(e)), exc_info=True)
                                     skipped_count += 1
                                 finally:
                                     thread_db.close()
@@ -2306,7 +2339,7 @@ def discover_assets(connection_id):
                                     columns=asset_data['columns']
                                 )
                                 db.add(asset)
-                                db.flush()
+                                # OPTIMIZED: Removed individual db.flush() - let SQLAlchemy batch inserts
                             except Exception as flush_error:
 
                                 error_str = str(flush_error)
@@ -2334,7 +2367,7 @@ def discover_assets(connection_id):
                                                 columns=asset_data['columns']
                                             )
                                             db.add(asset)
-                                            db.flush()
+                                            # OPTIMIZED: Removed individual db.flush() here too
                                         except Exception as retry_error:
                                             logger.warning('FN:discover_assets asset_id:{} message:Retry failed, skipping error:{}'.format(asset_data['id'], str(retry_error)))
                                             skipped_count += 1
@@ -2398,40 +2431,76 @@ def discover_assets(connection_id):
                                     "sample_rows_count": None
                                 }
                             
-                            discovery = DataDiscovery(
-                                asset_id=asset.id,
-                                storage_location=storage_location,
-                                file_metadata=file_metadata,
-                                schema_json=schema_json_full,
-                                schema_hash=schema_hash,
-                                status="pending",
-                                approval_status=None,
-                                discovered_at=datetime.utcnow(),
-                                folder_path=item.get("folder", ""),
-                                data_source_type="azure_blob_storage",
-                                environment=item_config.get("environment", config_data.get("environment", "production")),
-                                discovery_info={
+                            # OPTIMIZED: Collect discovery data for bulk insert instead of individual adds
+                            discovery_data = {
+                                "storage_location": storage_location,
+                                "file_metadata": file_metadata,
+                                "schema_json": schema_json_full,
+                                "schema_hash": schema_hash,
+                                "status": "pending",
+                                "approval_status": None,
+                                "discovered_at": datetime.utcnow(),
+                                "folder_path": item.get("folder", ""),
+                                "data_source_type": "azure_blob_storage",
+                                "environment": item_config.get("environment", config_data.get("environment", "production")),
+                                "discovery_info": {
                                     "connection_id": item_connection_id if item_connection_id else connection_id,
                                     "connection_name": item_connection_name,
                                     "container": item.get("container", ""),
                                     "discovered_by": "api_discovery"
+                                },
+                                "asset_id": None  # Will be set after flush
                                 }
-                            )
-                            db.add(discovery)
+                            discoveries_to_add.append((asset, discovery_data))
                             created_count += 1
-                            logger.debug('FN:discover_assets asset_name:{} discovery_id:{} message:Added asset and discovery record'.format(
-                                asset_data.get('name', 'unknown'), discovery.id if discovery.id else 'pending'
-                            ))
                     except Exception as e:
                         logger.error('FN:discover_assets message:Error processing asset error:{}'.format(str(e)), exc_info=True)
                         skipped_count += 1
                         continue
                 
+                # OPTIMIZED: Flush to get asset IDs, then bulk insert discoveries
+                if discoveries_to_add:
+                    try:
+                        db.flush()  # Get IDs for assets
+                        # Now update discovery_data with asset_id and bulk insert
+                        discovery_mappings = []
+                        for asset, discovery_data in discoveries_to_add:
+                            discovery_data["asset_id"] = asset.id
+                            discovery_mappings.append(discovery_data)
+                        
+                        if discovery_mappings:
+                            db.bulk_insert_mappings(DataDiscovery, discovery_mappings)
+                            logger.debug('FN:discover_assets batch_number:{} message:Bulk inserted {} discovery records'.format(batch_num, len(discovery_mappings)))
+                    except Exception as e:
+                        logger.error('FN:discover_assets message:Error flushing assets or bulk inserting discoveries error:{}'.format(str(e)), exc_info=True)
+                        db.rollback()
+                        # Fallback to individual inserts if bulk insert fails
+                        for asset, discovery_data in discoveries_to_add:
+                            try:
+                                discovery = DataDiscovery(
+                                    asset_id=asset.id,
+                                    storage_location=discovery_data["storage_location"],
+                                    file_metadata=discovery_data["file_metadata"],
+                                    schema_json=discovery_data["schema_json"],
+                                    schema_hash=discovery_data["schema_hash"],
+                                    status=discovery_data["status"],
+                                    approval_status=discovery_data["approval_status"],
+                                    discovered_at=discovery_data["discovered_at"],
+                                    folder_path=discovery_data["folder_path"],
+                                    data_source_type=discovery_data["data_source_type"],
+                                    environment=discovery_data["environment"],
+                                    discovery_info=discovery_data["discovery_info"]
+                                )
+                                db.add(discovery)
+                            except Exception as fallback_error:
+                                logger.warning('FN:discover_assets message:Fallback discovery insert failed error:{}'.format(str(fallback_error)))
+                
 
-                if total_assets > 5000:
+                # OPTIMIZED: Always commit in batches (not just for >5000 assets)
+                if len(batch) > 0:
                     try:
                         db.commit()
-                        logger.debug('FN:discover_assets batch_number:{} message:Committed batch'.format(batch_start//batch_size + 1))
+                        logger.debug('FN:discover_assets batch_number:{} message:Committed batch'.format(batch_num))
                     except Exception as e:
                         logger.error('FN:discover_assets message:Error committing batch error:{}'.format(str(e)), exc_info=True)
                         try:
@@ -2459,7 +2528,6 @@ def discover_assets(connection_id):
                     db.rollback()
                 except Exception as rollback_error:
                     logger.error('FN:discover_assets message:Error during rollback error:{}'.format(str(rollback_error)))
-
                     db.close()
                     db = SessionLocal()
                 

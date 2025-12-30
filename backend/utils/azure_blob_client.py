@@ -65,11 +65,9 @@ def create_azure_blob_client(config: Dict) -> 'AzureBlobClient':
         raise ValueError("account_name is required when using credential authentication")
     
     if use_dfs:
-
         dfs_account_url = f"https://{account_name}.dfs.core.windows.net"
         return AzureBlobClient(dfs_account_url=dfs_account_url, dfs_credential=credential)
     else:
-
         account_url = f"https://{account_name}.blob.core.windows.net"
         return AzureBlobClient(account_url=account_url, credential=credential)
 
@@ -113,7 +111,7 @@ class AzureBlobClient:
 
             normalized_path = path.strip('/') if path else ""
             
-
+            
             files = []
             paths = file_system_client.get_paths(path=normalized_path, recursive=True)
             
@@ -479,8 +477,9 @@ class AzureBlobClient:
             
             logger.info('FN:list_file_shares share_count:{}'.format(len(shares)))
             return shares
-        except ImportError:
-            logger.warning('FN:list_file_shares message:azure-storage-file-share package not installed')
+        except ImportError as import_err:
+            # Log the actual import error for debugging
+            logger.warning('FN:list_file_shares message:azure-storage-file-share package not installed or import failed error:{}'.format(str(import_err)))
             return []
         except Exception as e:
             logger.error('FN:list_file_shares error:{}'.format(str(e)))
@@ -515,8 +514,9 @@ class AzureBlobClient:
             
             logger.info('FN:list_queues queue_count:{}'.format(len(queues)))
             return queues
-        except ImportError:
-            logger.warning('FN:list_queues message:azure-storage-queue package not installed')
+        except ImportError as import_err:
+            # Log the actual import error for debugging
+            logger.warning('FN:list_queues message:azure-storage-queue package not installed or import failed error:{}'.format(str(import_err)))
             return []
         except Exception as e:
             logger.error('FN:list_queues error:{}'.format(str(e)))
@@ -550,8 +550,9 @@ class AzureBlobClient:
             
             logger.info('FN:list_tables table_count:{}'.format(len(tables)))
             return tables
-        except ImportError:
-            logger.warning('FN:list_tables message:azure-data-tables package not installed')
+        except ImportError as import_err:
+            # Log the actual import error for debugging
+            logger.warning('FN:list_tables message:azure-data-tables package not installed or import failed error:{}'.format(str(import_err)))
             return []
         except Exception as e:
             logger.error('FN:list_tables error:{}'.format(str(e)))
