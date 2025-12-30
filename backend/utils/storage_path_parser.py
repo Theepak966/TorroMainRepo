@@ -70,7 +70,7 @@ class AzureBlobParser(StoragePathParser):
     
 
     BLOB_URL_PATTERN = re.compile(
-        r'^https://([^.]+)\.blob\.core\.windows\.net/([^/]+)(.*)$',
+        r'^https?://([^.]+)\.blob\.core\.windows\.net/([^/]+)(.*)$',
         re.IGNORECASE
     )
     

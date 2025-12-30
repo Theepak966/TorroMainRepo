@@ -399,7 +399,7 @@ const ConnectorsPage = () => {
         }
         
         
-        setDiscoveryProgress(prev => [...prev, `✓ Connection test successful!`]);
+        setDiscoveryProgress(prev => [...prev, 'Connection test successful']);
         
         
         let connection = null;
@@ -461,96 +461,153 @@ const ConnectorsPage = () => {
         
         
         if (testData.success) {
-          setDiscoveryProgress(prev => [...prev, `✓ Connection successful!`]);
-          
-          
-          setDiscoveryProgress(prev => [...prev, 'Discovering containers...']);
+          // Get containers list, but let backend stream control all progress messages
           const containersResponse = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/containers`);
           const containersData = await containersResponse.json();
           
           if (containersData.containers && containersData.containers.length > 0) {
-            
             const containerNames = containersData.containers.map(c => c.name);
             setConfig({...config, containers: containerNames});
             
-            
-            containersData.containers.forEach(container => {
-              setDiscoveryProgress(prev => [...prev, `[CONTAINER] ${container.name}`]);
-            });
-            
-            
+            // Start streaming - backend handles: auth → containers → files (in order)
             try {
-              const discoverResponse = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+              
+              const response = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover-stream`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
                 body: JSON.stringify({
                   containers: containerNames,
                   folder_path: config.folder_path || '',
                 }),
               });
               
-              if (!discoverResponse.ok) {
-                const errorData = await discoverResponse.json().catch(() => ({}));
-                throw new Error(errorData.error || `HTTP ${discoverResponse.status}: ${discoverResponse.statusText}`);
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
               }
               
-              const discoverData = await discoverResponse.json();
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+              let buffer = '';
               
-              if (discoverData.success !== false) {
+              let totalDiscovered = 0;
+              let totalUpdated = 0;
+              let totalSkipped = 0;
+              let currentContainer = null;
+              let fileCount = 0;
+              
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
                 
-                if (discoverData.assets_by_folder) {
-                  Object.keys(discoverData.assets_by_folder).forEach(containerName => {
-                    const folders = discoverData.assets_by_folder[containerName];
-                    const hasFolders = discoverData.has_folders?.[containerName] || false;
-                    const folderKeys = Object.keys(folders).sort();
-                    
-                    
-                    if (!hasFolders) {
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                
+                for (const line of lines) {
+                  if (line.startsWith('data: ')) {
+                    try {
+                      const data = JSON.parse(line.slice(6));
                       
-                      const rootAssets = folders[""] || [];
-                      rootAssets.forEach(asset => {
-                        setDiscoveryProgress(prev => [...prev, `  [FILE] ${asset.name}`]);
-                      });
-                    } else {
-                      
-                      folderKeys.forEach(folderPath => {
-                        const folderName = folderPath || '(root)';
-                        const assets = folders[folderPath];
-                        setDiscoveryProgress(prev => [...prev, `  [FOLDER] ${folderName}`]);
+                      if (data.type === 'progress') {
+                        setDiscoveryProgress(prev => [...prev, data.message]);
+                      } else if (data.type === 'container') {
+                        currentContainer = data.container;
+                        setDiscoveryProgress(prev => [...prev, `[CONTAINER] ${data.container}`]);
+                      } else if (data.type === 'file') {
+                        fileCount++;
+                        // Show all files for small datasets, or first 20 + every 50th for large datasets
+                        const shouldShow = data.total < 100 || data.index <= 20 || data.index % 50 === 0;
+                        if (shouldShow) {
+                          const displayPath = data.full_path || data.file;
+                          setDiscoveryProgress(prev => [...prev, `  [FILE] ${displayPath} (${data.index}/${data.total})`]);
+                        }
+                      } else if (data.type === 'progress' && data.percentage !== undefined) {
+                        setDiscoveryProgress(prev => [...prev, data.message]);
+                      } else if (data.type === 'complete') {
+                        totalDiscovered = data.discovered || 0;
+                        totalUpdated = data.updated || 0;
+                        totalSkipped = data.skipped || 0;
+                        setDiscoveryProgress(prev => [...prev, `Discovery complete! Found ${totalDiscovered} files. Saving assets to database...`]);
                         
-                        assets.forEach(asset => {
-                          setDiscoveryProgress(prev => [...prev, `    [FILE] ${asset.name}`]);
+                        // Trigger actual discovery to save assets
+                        fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            containers: containerNames,
+                            folder_path: config.folder_path || '',
+                          }),
+                        })
+                        .then(res => {
+                          if (!res.ok) {
+                            return res.json().then(err => Promise.reject(new Error(err.error || `HTTP ${res.status}: ${res.statusText}`)));
+                          }
+                          return res.json();
+                        })
+                        .then(discoveryResult => {
+                          const saved = discoveryResult.created_count || discoveryResult.discovered_count || 0;
+                          const updated = discoveryResult.updated_count || 0;
+                          const skipped = discoveryResult.skipped_count || 0;
+                          const total = saved + updated;
+                          
+                          // Always show the result, even if all were skipped
+                          if (total > 0) {
+                            setDiscoveryProgress(prev => [...prev, `Saved ${total} assets to database (${saved} new, ${updated} updated, ${skipped} skipped)`]);
+                          } else if (skipped > 0) {
+                            setDiscoveryProgress(prev => [...prev, `All ${skipped} assets already exist in database (skipped duplicates)`]);
+                          } else {
+                            setDiscoveryProgress(prev => [...prev, `No new assets to save`]);
+                          }
+                          
+                          setTestResult({
+                            success: true,
+                            message: total > 0 
+                              ? `Connection successful! Discovered ${total} assets in ${testData.container_count} container(s)`
+                              : skipped > 0
+                                ? `Connection successful! All ${skipped} assets already exist (no new assets)`
+                                : `Connection successful! No assets found`,
+                            discoveredAssets: total,
+                            totalContainers: testData.container_count,
+                            connectionId: connection.id,
+                            containers: containersData.containers || [],
+                          });
+                        })
+                        .catch(err => {
+                          setDiscoveryProgress(prev => [...prev, `Error saving assets: ${err.message}`]);
+                          setTestResult({
+                            success: true,
+                            message: `Connection successful! Found ${totalDiscovered} files but error saving: ${err.message}`,
+                            discoveredAssets: 0,
+                            totalContainers: testData.container_count,
+                            connectionId: connection.id,
+                            containers: containersData.containers || [],
+                          });
                         });
-                      });
+                      } else if (data.type === 'error') {
+                        setDiscoveryProgress(prev => [...prev, `Error: ${data.message}`]);
+                        setTestResult({
+                          success: false,
+                          message: `Discovery error: ${data.message}`,
+                          discoveredAssets: totalDiscovered,
+                          totalContainers: testData.container_count,
+                        });
+                        return;
+                      } else if (data.type === 'warning') {
+                        setDiscoveryProgress(prev => [...prev, `Warning: ${data.message}`]);
+                      }
+                    } catch (parseError) {
+                      console.error('Error parsing SSE data:', parseError, line);
                     }
-                  });
+                  }
                 }
-                
-                const totalDiscovered = discoverData.discovered_count || discoverData.created_count || 0;
-                setDiscoveryProgress(prev => [...prev, `✓ Discovery complete! Found ${totalDiscovered} assets`]);
-          setTestResult({
-            success: true,
-                  message: `Connection successful! Discovered ${totalDiscovered} assets in ${testData.container_count} container(s)`,
-                  discoveredAssets: totalDiscovered,
-                  totalContainers: testData.container_count,
-                  connectionId: connection.id,
-                  containers: containersData.containers || [],
-                });
-              } else {
-                setDiscoveryProgress(prev => [...prev, `⚠ Discovery issue: ${discoverData.message || 'Unknown error'}`]);
-                setTestResult({
-                  success: true,
-                  message: `Connection successful! Found ${testData.container_count} container(s). Discovery: ${discoverData.message || 'Completed'}`,
-                  discoveredAssets: discoverData.discovered_count || 0,
-                  totalContainers: testData.container_count,
-                  connectionId: connection.id,
-                  containers: containersData.containers || [],
-                });
               }
+              
             } catch (discoverError) {
-              setDiscoveryProgress(prev => [...prev, `✗ Discovery error: ${discoverError.message}`]);
+              setDiscoveryProgress(prev => [...prev, `Discovery error: ${discoverError.message}`]);
               console.error(`FN:handleTestConnection message:Discovery error error:${discoverError.message || discoverError}`);
           setTestResult({
             success: true,
@@ -784,14 +841,14 @@ const ConnectorsPage = () => {
                       {discoveryProgress.map((message, index) => (
                         <Box key={index} sx={{ 
                           py: 0.5,
-                          color: message.includes('✓') ? 'success.main' : 
-                                 message.includes('✗') ? 'error.main' : 
+                          color: message.includes('Discovery complete') ? 'success.main' : 
+                                 message.includes('Error') ? 'error.main' : 
                                  message.includes('Discovering') ? 'primary.main' : 'text.primary',
                           display: 'flex',
                           alignItems: 'center',
                           gap: 1
                         }}>
-                          {message.includes('✓') && <CheckCircle sx={{ fontSize: 16 }} />}
+                          {message.includes('Discovery complete') && <CheckCircle sx={{ fontSize: 16 }} />}
                           <span>{message}</span>
                         </Box>
                       ))}
@@ -811,7 +868,7 @@ const ConnectorsPage = () => {
                   {testResult.success && testResult.discoveredAssets > 0 && (
                     <Card variant="outlined" sx={{ p: 2, mb: 3, bgcolor: 'success.light', color: 'success.dark' }}>
                       <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                        🎉 Discovery Complete!
+                        Discovery Complete
                       </Typography>
                       <Typography variant="body1">
                         <strong>{testResult.discoveredAssets}</strong> assets discovered across <strong>{testResult.totalContainers || 0}</strong> container(s)
@@ -849,9 +906,9 @@ const ConnectorsPage = () => {
                           const isContainer = message.includes('[CONTAINER]');
                           const isFolder = message.includes('[FOLDER]');
                           const isAsset = message.includes('[FILE]');
-                          const isSuccess = message.includes('✓') || message.includes('Discovery complete');
-                          const isError = message.includes('✗') || message.includes('error');
-                          const isWarning = message.includes('⚠');
+                          const isSuccess = message.includes('Discovery complete') || message.includes('successful');
+                          const isError = message.includes('Error') || message.includes('error');
+                          const isWarning = message.includes('Warning');
                           
                           let color = 'text.primary';
                           if (isSuccess) color = 'success.main';

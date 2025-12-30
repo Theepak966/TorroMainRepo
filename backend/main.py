@@ -29,7 +29,7 @@ except ImportError:
     print("=" * 70)
     sys.exit(1)
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response, copy_current_request_context, has_request_context
 from flask_cors import CORS
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -1648,6 +1648,160 @@ def build_business_metadata(blob_info, azure_properties, file_extension, contain
         "azure_metadata_tags": azure_metadata
     })
 
+@app.route('/api/connections/<int:connection_id>/discover-stream', methods=['POST'])
+@handle_error
+def discover_assets_stream(connection_id):
+    """Stream discovery progress using Server-Sent Events (SSE)"""
+    if not AZURE_AVAILABLE:
+        return jsonify({"error": "Azure utilities not available"}), 503
+    
+    # Capture request data and connection info before generator (Flask context issue fix)
+    request_data = request.json or {}
+    db = SessionLocal()
+    try:
+        connection = db.query(Connection).filter(Connection.id == connection_id).first()
+        if not connection:
+            return jsonify({"error": "Connection not found"}), 404
+        
+        if connection.connector_type != 'azure_blob':
+            return jsonify({"error": "This endpoint is only for Azure Blob connections"}), 400
+        
+        # Extract all needed data before generator
+        connector_type = connection.connector_type
+        config_data = connection.config or {}
+    finally:
+        db.close()
+    
+    def generate():
+        import json
+        # No Flask context needed - we've already captured all data
+        # No database session needed - all data is pre-captured
+        try:
+            # Step 1: Parse folder path if needed
+            containers = request_data.get('containers', config_data.get('containers', []))
+            folder_path = request_data.get('folder_path', config_data.get('folder_path', ''))
+            
+            parsed_container = None
+            parsed_path = folder_path
+            parsed_account_name = None
+            
+            # Create a copy of config_data to modify
+            working_config = config_data.copy()
+            
+            if folder_path and (folder_path.startswith('abfs://') or folder_path.startswith('abfss://') or folder_path.startswith('https://') or folder_path.startswith('http://')):
+                try:
+                    from utils.storage_path_parser import parse_storage_path
+                    parsed = parse_storage_path(folder_path)
+                    parsed_container = parsed.get('container')
+                    parsed_path = parsed.get('path', '')
+                    parsed_account_name = parsed.get('account_name')
+                    parsed_storage_type = parsed.get('type')
+                    
+                    # Update config if account_name is different or if it's a Data Lake URL
+                    if parsed_account_name and parsed_account_name != working_config.get('account_name'):
+                        working_config['account_name'] = parsed_account_name
+                    
+                    # If it's a Data Lake URL (abfs/abfss), ensure use_dfs_endpoint is set
+                    if parsed_storage_type == 'azure_datalake' or folder_path.startswith(('abfs://', 'abfss://')):
+                        working_config['use_dfs_endpoint'] = True
+                        working_config['storage_type'] = 'datalake'
+                    
+                    if parsed_container and parsed_container not in containers:
+                        containers = [parsed_container]
+                    folder_path = parsed_path
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': f'Failed to parse storage URL: {str(e)}'})}\n\n"
+            
+            # Step 2: Authenticate FIRST
+            yield f"data: {json.dumps({'type': 'progress', 'message': 'Authenticating with Azure...', 'step': 'auth'})}\n\n"
+            
+            try:
+                from utils.azure_blob_client import create_azure_blob_client
+                blob_client = create_azure_blob_client(working_config)
+                yield f"data: {json.dumps({'type': 'progress', 'message': 'Authentication successful', 'step': 'auth_complete'})}\n\n"
+            except ValueError as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                return
+            
+            # Step 3: Discover containers (if not provided)
+            if not containers:
+                yield f"data: {json.dumps({'type': 'progress', 'message': 'Discovering containers...', 'step': 'containers'})}\n\n"
+                try:
+                    containers_list = blob_client.list_containers()
+                    containers = [c["name"] for c in containers_list]
+                    yield f"data: {json.dumps({'type': 'progress', 'message': f'Found {len(containers)} container(s)', 'containers': containers})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to discover containers: {str(e)}'})}\n\n"
+                    return
+            
+            if not containers:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No containers found in storage account'})}\n\n"
+                return
+            
+            # Step 4: Process each container sequentially
+            total_discovered = 0
+            total_updated = 0
+            total_skipped = 0
+            
+            for container_idx, container_name in enumerate(containers):
+                yield f"data: {json.dumps({'type': 'container', 'container': container_name, 'message': f'Processing container {container_idx + 1}/{len(containers)}: {container_name}', 'container_index': container_idx + 1, 'total_containers': len(containers)})}\n\n"
+                
+                try:
+                    # Discover all files recursively in this container
+                    is_datalake = working_config.get('storage_type') == 'datalake' or working_config.get('use_dfs_endpoint', False)
+                    if is_datalake and hasattr(blob_client, 'list_datalake_files'):
+                        blobs = blob_client.list_datalake_files(
+                            file_system_name=container_name,
+                            path=folder_path,
+                            file_extensions=None
+                        )
+                    else:
+                        blobs = blob_client.list_blobs(
+                            container_name=container_name,
+                            folder_path=folder_path,
+                            file_extensions=None
+                        )
+                    
+                    yield f"data: {json.dumps({'type': 'progress', 'message': f'Found {len(blobs)} files in {container_name} (including all subfolders)', 'file_count': len(blobs), 'container': container_name})}\n\n"
+                    
+                    if len(blobs) > 0:
+                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Processing {len(blobs)} files from {container_name}...', 'step': 'processing', 'container': container_name})}\n\n"
+                        
+                        # Show all files (for small datasets) or every Nth file (for large datasets)
+                        for i, blob_info in enumerate(blobs):
+                            blob_name = blob_info.get("name", "unknown")
+                            full_path = blob_info.get("full_path", blob_name)
+                            
+                            # Show all files if < 100, otherwise show first 20 and every 50th
+                            if len(blobs) < 100 or i < 20 or (i + 1) % 50 == 0:
+                                yield f"data: {json.dumps({'type': 'file', 'file': blob_name, 'full_path': full_path, 'container': container_name, 'index': i+1, 'total': len(blobs)})}\n\n"
+                            
+                            total_discovered += 1
+                            
+                            # Progress update every 100 files or at milestones
+                            if (i + 1) % 100 == 0 or (i + 1) == len(blobs):
+                                percentage = round((i+1)/len(blobs)*100) if len(blobs) > 0 else 0
+                                yield f"data: {json.dumps({'type': 'progress', 'message': f'Processed {i+1}/{len(blobs)} files in {container_name} ({percentage}%)', 'processed': i+1, 'total': len(blobs), 'percentage': percentage, 'container': container_name})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'progress', 'message': f'No files found in {container_name}', 'container': container_name})}\n\n"
+                    
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Error processing container {container_name}: {str(e)}', 'container': container_name})}\n\n"
+                    continue
+            
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Discovery complete', 'discovered': total_discovered, 'updated': total_updated, 'skipped': total_skipped})}\n\n"
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Use print instead of logger to avoid context issues
+            print(f'FN:discover_assets_stream error:{error_msg}')
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+    })
+
 @app.route('/api/connections/<int:connection_id>/discover', methods=['POST'])
 @handle_error
 def discover_assets(connection_id):
@@ -1668,6 +1822,42 @@ def discover_assets(connection_id):
         containers = data.get('containers', config_data.get('containers', []))
         folder_path = data.get('folder_path', config_data.get('folder_path', ''))
         
+        parsed_container = None
+        parsed_path = folder_path
+        parsed_account_name = None
+        
+        if folder_path and (folder_path.startswith('abfs://') or folder_path.startswith('abfss://') or folder_path.startswith('https://') or folder_path.startswith('http://')):
+            try:
+                from utils.storage_path_parser import parse_storage_path
+                parsed = parse_storage_path(folder_path)
+                parsed_container = parsed.get('container')
+                parsed_path = parsed.get('path', '')
+                parsed_account_name = parsed.get('account_name')
+                parsed_storage_type = parsed.get('type')
+                
+                logger.info('FN:discover_assets parsed_storage_url:{} container:{} path:{} account_name:{} type:{}'.format(
+                    folder_path, parsed_container, parsed_path, parsed_account_name, parsed_storage_type
+                ))
+                
+                # Update config if account_name is different or if it's a Data Lake URL
+                if parsed_account_name and parsed_account_name != config_data.get('account_name'):
+                    logger.info('FN:discover_assets message:Using account_name from URL:{}'.format(parsed_account_name))
+                    config_data['account_name'] = parsed_account_name
+                
+                # If it's a Data Lake URL (abfs/abfss), ensure use_dfs_endpoint is set
+                if parsed_storage_type == 'azure_datalake' or folder_path.startswith(('abfs://', 'abfss://')):
+                    config_data['use_dfs_endpoint'] = True
+                    config_data['storage_type'] = 'datalake'
+                    logger.info('FN:discover_assets message:Detected Data Lake URL, enabling DFS endpoint')
+                
+                if parsed_container and parsed_container not in containers:
+                    containers = [parsed_container]
+                    logger.info('FN:discover_assets message:Using container from URL:{}'.format(parsed_container))
+                folder_path = parsed_path
+            except Exception as e:
+                logger.warning('FN:discover_assets failed_to_parse_storage_url:{} error:{}'.format(folder_path, str(e)))
+                parsed_container = None
+                parsed_path = folder_path
 
         try:
             from utils.azure_blob_client import create_azure_blob_client

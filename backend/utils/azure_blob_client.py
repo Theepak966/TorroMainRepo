@@ -1,5 +1,5 @@
 from azure.storage.blob import BlobServiceClient, ContentSettings
-from azure.identity import ClientSecretCredential
+from azure.identity import ClientSecretCredential, AzureCliCredential, DefaultAzureCredential
 from typing import List, Dict, Optional, Union
 import logging
 
@@ -26,30 +26,52 @@ def create_azure_blob_client(config: Dict) -> 'AzureBlobClient':
     client_id = config.get('client_id')
     client_secret = config.get('client_secret')
     
-    if account_name and tenant_id and client_id and client_secret:
-
-        use_dfs = config.get('use_dfs_endpoint', False) or config.get('storage_type') == 'datalake'
-        
-
-        credential = ClientSecretCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret
-        )
-        
-        if use_dfs:
-
-            dfs_account_url = f"https://{account_name}.dfs.core.windows.net"
-            return AzureBlobClient(dfs_account_url=dfs_account_url, dfs_credential=credential)
-        else:
-
-            account_url = f"https://{account_name}.blob.core.windows.net"
-            return AzureBlobClient(account_url=account_url, credential=credential)
+    use_dfs = config.get('use_dfs_endpoint', False) or config.get('storage_type') == 'datalake'
     
-    raise ValueError(
-        "Config must contain either 'connection_string' OR "
-        "('account_name', 'tenant_id', 'client_id', 'client_secret') for service principal authentication"
-    )
+    credential = None
+    
+    if account_name and tenant_id and client_id and client_secret:
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret
+            )
+            logger.info('FN:create_azure_blob_client message:Using Service Principal authentication')
+        except Exception as e:
+            logger.warning('FN:create_azure_blob_client message:Service Principal auth failed, trying Azure CLI error:{}'.format(str(e)))
+            credential = None
+    
+    if not credential:
+        try:
+            credential = AzureCliCredential()
+            logger.info('FN:create_azure_blob_client message:Using Azure CLI authentication')
+        except Exception as e:
+            logger.warning('FN:create_azure_blob_client message:Azure CLI auth failed, trying DefaultAzureCredential error:{}'.format(str(e)))
+            try:
+                credential = DefaultAzureCredential()
+                logger.info('FN:create_azure_blob_client message:Using DefaultAzureCredential authentication')
+            except Exception as e2:
+                logger.error('FN:create_azure_blob_client message:All authentication methods failed error:{}'.format(str(e2)))
+                raise ValueError(
+                    "Failed to authenticate. Tried Service Principal, Azure CLI, and DefaultAzureCredential. "
+                    "Please ensure either:\n"
+                    "1. Service Principal credentials are provided (account_name, tenant_id, client_id, client_secret), OR\n"
+                    "2. Azure CLI is installed and logged in (run 'az login'), OR\n"
+                    "3. DefaultAzureCredential can find credentials (Managed Identity, Environment Variables, etc.)"
+                )
+    
+    if not account_name:
+        raise ValueError("account_name is required when using credential authentication")
+    
+    if use_dfs:
+
+        dfs_account_url = f"https://{account_name}.dfs.core.windows.net"
+        return AzureBlobClient(dfs_account_url=dfs_account_url, dfs_credential=credential)
+    else:
+
+        account_url = f"https://{account_name}.blob.core.windows.net"
+        return AzureBlobClient(account_url=account_url, credential=credential)
 
 
 class AzureBlobClient:
@@ -92,13 +114,8 @@ class AzureBlobClient:
             normalized_path = path.strip('/') if path else ""
             
 
-            if normalized_path:
-                directory_client = file_system_client.get_directory_client(normalized_path)
-            else:
-                directory_client = file_system_client.get_directory_client("")
-            
             files = []
-            paths = directory_client.list_paths(recursive=False)
+            paths = file_system_client.get_paths(path=normalized_path, recursive=True)
             
             for path_item in paths:
 
