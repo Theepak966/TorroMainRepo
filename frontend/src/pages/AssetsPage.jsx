@@ -654,7 +654,43 @@ const AssetsPage = () => {
                 }
                 
                 
-                await fetchAssets();
+                // Force refresh - reset page and fetch with cache busting
+                setCurrentPage(0);
+                // Force a fresh fetch by adding timestamp to URL
+                const timestamp = new Date().getTime();
+                const url = `${API_BASE_URL}/api/assets?page=1&per_page=${pageSize}&_t=${timestamp}`;
+                
+                const refreshResponse = await fetch(url);
+                if (refreshResponse.ok) {
+                  const refreshData = await refreshResponse.json();
+                  if (refreshData.assets && refreshData.pagination) {
+                    setAllAssets(refreshData.assets);
+                    setTotalAssets(refreshData.pagination.total);
+                    setTotalPages(refreshData.pagination.total_pages);
+                    
+                    // Apply filters
+                    let filtered = refreshData.assets;
+                    if (searchTerm) {
+                      filtered = filtered.filter(asset => 
+                        asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                        (asset.catalog && asset.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
+                      );
+                    }
+                    if (typeFilter) {
+                      filtered = filtered.filter(asset => asset.type === typeFilter);
+                    }
+                    if (catalogFilter) {
+                      filtered = filtered.filter(asset => asset.catalog === catalogFilter);
+                    }
+                    if (approvalStatusFilter) {
+                      filtered = filtered.filter(asset => {
+                        const status = asset.operational_metadata?.approval_status || 'pending_review';
+                        return status === approvalStatusFilter;
+                      });
+                    }
+                    setAssets(filtered);
+                  }
+                }
               } catch (error) {
                 console.error('Error refreshing:', error);
                 

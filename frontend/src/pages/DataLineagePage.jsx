@@ -203,6 +203,42 @@ const DataLineagePage = () => {
   const [impactAnalysis, setImpactAnalysis] = useState(null);
   const [showImpactAnalysis, setShowImpactAnalysis] = useState(false);
 
+  const fetchAllAssets = async () => {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+    // Prefer paginated endpoint; fall back to old array response.
+    const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=500`);
+    if (!firstResp.ok) return [];
+
+    const firstData = await firstResp.json();
+    if (Array.isArray(firstData)) {
+      return firstData;
+    }
+
+    if (!firstData || !Array.isArray(firstData.assets) || !firstData.pagination) {
+      return [];
+    }
+
+    const all = [...firstData.assets];
+    const totalPages = Number(firstData.pagination.total_pages || 1);
+
+    // Safety cap to avoid accidental infinite/huge loops
+    const cappedTotalPages = Math.min(totalPages, 200);
+
+    for (let p = 2; p <= cappedTotalPages; p++) {
+      const resp = await fetch(`${API_BASE_URL}/api/assets?page=${p}&per_page=500`);
+      if (!resp.ok) break;
+      const data = await resp.json();
+      if (data && Array.isArray(data.assets)) {
+        all.push(...data.assets);
+      } else {
+        break;
+      }
+    }
+
+    return all;
+  };
+
   const fetchLineage = async () => {
       setLoading(true);
     try {
@@ -210,11 +246,10 @@ const DataLineagePage = () => {
       
       
       const relationshipsResponse = await fetch(`${API_BASE_URL}/api/lineage/relationships`);
-      const assetsResponse = await fetch(`${API_BASE_URL}/api/assets`);
+      const assets = await fetchAllAssets();
       
-      if (assetsResponse.ok) {
+      if (assets && assets.length >= 0) {
         const relationships = relationshipsResponse.ok ? await relationshipsResponse.json() : [];
-        const assets = await assetsResponse.json();
         
         
         const assetMap = new Map();
@@ -304,14 +339,8 @@ const DataLineagePage = () => {
 
   const fetchAssets = async () => {
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets`);
-      if (response.ok) {
-      const data = await response.json();
-        setAssets(data);
-      } else {
-        setAssets([]);
-      }
+      const allAssets = await fetchAllAssets();
+      setAssets(allAssets);
     } catch (error) {
       if (import.meta.env.DEV) {
       console.error('Error fetching assets:', error);
@@ -2417,8 +2446,11 @@ const DataLineagePage = () => {
       <ManualLineageDialog
         open={manualLineageOpen}
         onClose={() => setManualLineageOpen(false)}
+        assets={assets}
         onSuccess={() => {
+          // Refresh both lineage + assets (so dropdown includes new discoveries)
           fetchLineage();
+          fetchAssets();
         }}
       />
     </Box>

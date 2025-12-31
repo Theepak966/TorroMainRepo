@@ -451,9 +451,9 @@ def get_assets():
         ).outerjoin(
             DataDiscovery, DataDiscovery.id == latest_discovery_subq.c.latest_discovery_id
         ).order_by(
+            Asset.discovered_at.desc(),
             case((DataDiscovery.id.is_(None), 1), else_=0),
-            DataDiscovery.id.asc(),
-            Asset.discovered_at.desc()
+            DataDiscovery.id.desc()
         ).limit(per_page).offset(offset).all()
         
         result = []
@@ -1976,6 +1976,14 @@ def discover_assets(connection_id):
                         max_workers = 50
                     else:
                         max_workers = 20
+
+                    # Avoid exhausting DB connections (each worker may open a DB session for dedup checks)
+                    try:
+                        max_workers_cap = int(os.getenv("DISCOVERY_MAX_WORKERS", "20"))
+                        if max_workers_cap > 0:
+                            max_workers = min(max_workers, max_workers_cap)
+                    except Exception:
+                        max_workers = min(max_workers, 20)
                     logger.info('FN:discover_assets container_name:{} total_blobs:{} message:Processing with {} concurrent workers'.format(container_name, len(blobs), max_workers))
                     
                     def process_blob(blob_info):
@@ -1999,6 +2007,22 @@ def discover_assets(connection_id):
 
 
                                 existing_asset = None
+                                
+                                # Initialize azure_properties (always needed, regardless of deduplication)
+                                azure_properties = {
+                                    "etag": blob_info.get("etag", ""),
+                                    "size": blob_info.get("size", 0),
+                                    "content_type": blob_info.get("content_type", "application/octet-stream"),
+                                    "created_at": blob_info.get("created_at"),
+                                    "last_modified": blob_info.get("last_modified"),
+                                    "access_tier": blob_info.get("access_tier"),
+                                    "lease_status": blob_info.get("lease_status"),
+                                    "content_encoding": blob_info.get("content_encoding"),
+                                    "content_language": blob_info.get("content_language"),
+                                    "cache_control": blob_info.get("cache_control"),
+                                    "metadata": blob_info.get("metadata", {})
+                                }
+                                
                                 # Skip deduplication for test discoveries (from ConnectorsPage)
                                 # Only do deduplication for refresh operations (from AssetsPage)
                                 if AZURE_AVAILABLE and not skip_deduplication:
@@ -2181,6 +2205,9 @@ def discover_assets(connection_id):
 
                                     schema_json_full = clean_for_json(metadata.get("schema_json", {}))
                                     
+                                    # IMPORTANT: close the thread DB session for created assets to avoid connection leaks
+                                    # (main thread will create/save the Asset using its own session)
+                                    thread_db.close()
                                     return {
                                         "action": "created",
                                         "asset_data": {
@@ -2203,7 +2230,6 @@ def discover_assets(connection_id):
                                         "config_data": config_data,
                                         "connection_id": connection_id,
                                         "connection_name": connection.name,
-                                        "thread_db": thread_db
                                     }
                             except Exception as e:
                                 thread_db.close()
@@ -2298,6 +2324,28 @@ def discover_assets(connection_id):
                 
                 # Collect discoveries for bulk insert
                 discoveries_to_add = []
+
+                # Pre-check for duplicate Asset IDs in this batch to avoid IntegrityError at flush/commit time.
+                created_ids_in_batch = []
+                for it in batch:
+                    try:
+                        if it and it.get("action") == "created":
+                            asset_id = (it.get("asset_data") or {}).get("id")
+                            if asset_id:
+                                created_ids_in_batch.append(asset_id)
+                    except Exception:
+                        continue
+
+                existing_ids_in_batch = set()
+                if created_ids_in_batch:
+                    try:
+                        existing_ids_in_batch = set(
+                            x[0] for x in db.query(Asset.id).filter(Asset.id.in_(created_ids_in_batch)).all()
+                        )
+                    except Exception:
+                        existing_ids_in_batch = set()
+
+                seen_created_ids_in_batch = set()
                 
                 for item in batch:
                     try:
@@ -2329,6 +2377,17 @@ def discover_assets(connection_id):
 
                             asset_data = item["asset_data"]
                             try:
+                                asset_id = asset_data.get("id")
+                                if not asset_id:
+                                    skipped_count += 1
+                                    continue
+
+                                # Skip duplicates (already in DB or duplicated within this batch)
+                                if asset_id in existing_ids_in_batch or asset_id in seen_created_ids_in_batch:
+                                    skipped_count += 1
+                                    continue
+                                seen_created_ids_in_batch.add(asset_id)
+
                                 asset = Asset(
                                     id=asset_data['id'],
                                     name=asset_data['name'],

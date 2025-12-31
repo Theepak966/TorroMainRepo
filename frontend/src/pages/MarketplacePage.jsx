@@ -83,6 +83,43 @@ const MarketplacePage = () => {
   const [recommendedTags, setRecommendedTags] = useState({});
   const [tagMenuAnchor, setTagMenuAnchor] = useState(null);
 
+  // Fetch all assets across all pages (pagination-safe)
+  const fetchAllAssets = async () => {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+    
+    // Prefer paginated endpoint; fall back to old array response.
+    const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=500`);
+    if (!firstResp.ok) return [];
+
+    const firstData = await firstResp.json();
+    if (Array.isArray(firstData)) {
+      return firstData;
+    }
+
+    if (!firstData || !Array.isArray(firstData.assets) || !firstData.pagination) {
+      return [];
+    }
+
+    const all = [...firstData.assets];
+    const totalPages = Number(firstData.pagination.total_pages || 1);
+
+    // Safety cap to avoid accidental infinite/huge loops
+    const cappedTotalPages = Math.min(totalPages, 200);
+
+    for (let p = 2; p <= cappedTotalPages; p++) {
+      const resp = await fetch(`${API_BASE_URL}/api/assets?page=${p}&per_page=500`);
+      if (!resp.ok) break;
+      const data = await resp.json();
+      if (data && Array.isArray(data.assets)) {
+        all.push(...data.assets);
+      } else {
+        break;
+      }
+    }
+
+    return all;
+  };
+
   const handleSearch = async () => {
     
     if (!catalog || !fileName) {
@@ -96,13 +133,8 @@ const MarketplacePage = () => {
 
     try {
       
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch assets');
-      }
-      
-      const allAssets = await response.json();
+      // Fetch all assets across all pages to get all catalogs from all connections
+      const allAssets = await fetchAllAssets();
       
       let matchingAsset = null;
       
