@@ -84,7 +84,7 @@ class SQLLineageExtractor:
                 return expression.name
             elif hasattr(expression, 'this'):
                 return self._extract_table_name(expression.this)
-        except:
+        except Exception:
             pass
         return None
     

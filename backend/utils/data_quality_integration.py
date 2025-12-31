@@ -85,7 +85,7 @@ def calculate_asset_quality_score(asset: Dict) -> Dict:
                 quality_metrics['timeliness'] = max(0.0, 1.0 - (days_since_update / 365))
             else:
                 quality_metrics['timeliness'] = 1.0
-        except:
+        except Exception:
             quality_metrics['timeliness'] = 0.5
     else:
         quality_metrics['timeliness'] = 0.5

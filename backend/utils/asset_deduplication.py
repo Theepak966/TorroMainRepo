@@ -106,7 +106,7 @@ def check_asset_exists(
                 
                 if normalized_stored == normalized_search_path:
                     return asset
-        except:
+        except Exception:
             pass
         return None
 

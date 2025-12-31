@@ -536,9 +536,9 @@ def get_discovery_by_id(discovery_id):
 
                         try:
                             dt = datetime.strptime(dt, '%Y-%m-%d')
-                        except:
+                        except (ValueError, TypeError):
                             return dt
-                except:
+                except (ValueError, TypeError):
                     return dt
             if hasattr(dt, 'strftime'):
 
@@ -2087,7 +2087,7 @@ def discover_assets(connection_id):
                                 if existing_asset:
                                     if not should_update:
                                         logger.info('FN:discover_assets blob_path:{} existing_asset_id:{} message:Skipping unchanged asset (deduplication)'.format(blob_path, existing_asset.id))
-
+                                        thread_db.close()
                                         return None
                                     else:
                                         logger.info('FN:discover_assets blob_path:{} existing_asset_id:{} schema_changed:{} message:Updating existing asset'.format(blob_path, existing_asset.id, schema_changed))
@@ -2210,6 +2210,8 @@ def discover_assets(connection_id):
                                 raise e
                         except Exception as e:
                             logger.error('FN:discover_assets container_name:{} blob_name:{} error:{}'.format(container_name, blob_info.get('name', 'unknown'), str(e)), exc_info=True)
+                            if 'thread_db' in locals():
+                                thread_db.close()
                             return None
                     
 

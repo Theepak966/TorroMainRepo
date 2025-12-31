@@ -109,7 +109,7 @@ def extract_parquet_schema(file_content: bytes) -> Dict:
             metadata = parquet_file.metadata
             if metadata and hasattr(metadata, 'num_rows'):
                 schema_dict["num_rows"] = metadata.num_rows
-        except:
+        except Exception:
             pass
         
         return schema_dict
@@ -150,7 +150,7 @@ def extract_csv_schema(file_content: bytes, sample_size: int = 0) -> Dict:
                     row = next(row_reader, None)
                     if row and len(row) == len(headers):
                         sample_rows.append(row)
-                except:
+                except Exception:
                     continue
         
         columns = []
