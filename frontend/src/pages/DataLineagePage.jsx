@@ -203,29 +203,64 @@ const DataLineagePage = () => {
   const [impactAnalysis, setImpactAnalysis] = useState(null);
   const [showImpactAnalysis, setShowImpactAnalysis] = useState(false);
 
+  const fetchAllAssets = async () => {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+    // Prefer paginated endpoint; fall back to old array response.
+    const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=500`);
+    if (!firstResp.ok) return [];
+
+    const firstData = await firstResp.json();
+    if (Array.isArray(firstData)) {
+      return firstData;
+    }
+
+    if (!firstData || !Array.isArray(firstData.assets) || !firstData.pagination) {
+      return [];
+    }
+
+    const all = [...firstData.assets];
+    const totalPages = Number(firstData.pagination.total_pages || 1);
+
+    // Safety cap to avoid accidental infinite/huge loops
+    const cappedTotalPages = Math.min(totalPages, 200);
+
+    for (let p = 2; p <= cappedTotalPages; p++) {
+      const resp = await fetch(`${API_BASE_URL}/api/assets?page=${p}&per_page=500`);
+      if (!resp.ok) break;
+      const data = await resp.json();
+      if (data && Array.isArray(data.assets)) {
+        all.push(...data.assets);
+      } else {
+        break;
+      }
+    }
+
+    return all;
+  };
+
   const fetchLineage = async () => {
       setLoading(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       
-      // Fetch real lineage relationships from API
-      const relationshipsResponse = await fetch(`${API_BASE_URL}/api/lineage/relationships`);
-      const assetsResponse = await fetch(`${API_BASE_URL}/api/assets`);
       
-      if (assetsResponse.ok) {
+      const relationshipsResponse = await fetch(`${API_BASE_URL}/api/lineage/relationships`);
+      const assets = await fetchAllAssets();
+      
+      if (assets && assets.length >= 0) {
         const relationships = relationshipsResponse.ok ? await relationshipsResponse.json() : [];
-        const assets = await assetsResponse.json();
         
-        // Create asset map for quick lookup
+        
         const assetMap = new Map();
         assets.forEach(asset => {
           assetMap.set(asset.id, asset);
         });
         
-        // Build nodes from ALL assets (not just those with relationships)
-        // This ensures all discovered assets appear in the lineage view
+        
+        
         const lineageNodes = assets.map(asset => {
-          // Extract source system from connector_id (e.g., "azure_blob_ConnectionName" -> "Azure Blob Storage")
+          
           let sourceSystem = 'Unknown';
           if (asset.connector_id) {
             const parts = asset.connector_id.split('_');
@@ -248,18 +283,18 @@ const DataLineagePage = () => {
           };
         });
         
-        // Build edges from REAL lineage relationships only (exclude inferred/fake)
-        // Only show relationships from: sql_parsing, manual, or api extraction methods
+        
+        
         const realRelationships = relationships.filter(rel => {
           const method = (rel.extraction_method || '').toLowerCase();
-          // Only include real lineage: SQL parsing, manual creation, or API-based
+          
           return method === 'sql_parsing' || 
                  method === 'manual' || 
                  method === 'api' ||
                  method === 'etl' ||
                  method === 'dbt' ||
                  method === 'databricks';
-          // Exclude: column_matching, ml_inference, inferred, unknown
+          
         });
         
         const edges = realRelationships.map(rel => ({
@@ -287,7 +322,7 @@ const DataLineagePage = () => {
         setNodes([]);
         setEdges([]);
       } else {
-        // Fallback: if no assets exist, show empty state
+        
         setFullLineageData({ nodes: [], edges: [], rawData: { nodes: [], edges: [] } });
         setNodes([]);
         setEdges([]);
@@ -304,14 +339,8 @@ const DataLineagePage = () => {
 
   const fetchAssets = async () => {
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets`);
-      if (response.ok) {
-      const data = await response.json();
-        setAssets(data);
-      } else {
-        setAssets([]);
-      }
+      const allAssets = await fetchAllAssets();
+      setAssets(allAssets);
     } catch (error) {
       if (import.meta.env.DEV) {
       console.error('Error fetching assets:', error);
@@ -378,7 +407,7 @@ const DataLineagePage = () => {
       }
     });
 
-    // Group nodes by catalog/connector for clustering
+    
     const nodesByCatalog = new Map();
     nodes.forEach(node => {
       const catalog = node.catalog || 'default';
@@ -406,9 +435,9 @@ const DataLineagePage = () => {
     const catalogSpacing = 200;
     const layoutedNodes = [];
 
-    // Layout nodes with clustering by catalog
+    
     nodesByLevel.forEach((nodeIds, level) => {
-      // Group nodes in this level by catalog
+      
       const nodesInLevelByCatalog = new Map();
       nodeIds.forEach(nodeId => {
         const node = nodes.find(n => n.id === nodeId);
@@ -424,7 +453,7 @@ const DataLineagePage = () => {
         }
       });
 
-      // Position nodes within each catalog group
+      
       let catalogYOffset = 0;
       nodesInLevelByCatalog.forEach((catalogNodes, groupKey) => {
         catalogNodes.forEach((node, index) => {
@@ -440,7 +469,7 @@ const DataLineagePage = () => {
       });
     });
 
-    // Handle nodes without levels (isolated nodes)
+    
     nodes.forEach(node => {
       if (!layoutedNodes.find(n => n.id === node.id)) {
         const catalog = node.catalog || 'default';
@@ -558,7 +587,7 @@ const DataLineagePage = () => {
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       
-      // Fetch real lineage and impact analysis for this specific asset
+      
       const [lineageResponse, impactResponse] = await Promise.all([
         fetch(`${API_BASE_URL}/api/lineage/asset/${assetId}`),
         fetch(`${API_BASE_URL}/api/lineage/impact/${assetId}`)
@@ -568,13 +597,13 @@ const DataLineagePage = () => {
         const lineageData = await lineageResponse.json();
         const { nodes, edges } = lineageData.lineage;
         
-        // Store impact analysis
+        
         if (impactResponse.ok) {
           const impactData = await impactResponse.json();
           setImpactAnalysis(impactData);
         }
         
-        // Use the nodes and edges from API
+        
         const filteredNodes = nodes;
         const filteredEdges = edges;
     
@@ -702,7 +731,7 @@ const DataLineagePage = () => {
       const pipelineRel = getPipelineRelationshipForFiltered(edge);
       const isPipelineEdge = pipelineRel !== null;
       
-      // Color by pipeline type or default
+      
       let edgeColor = '#64b5f6';
       let edgeWidth = 1;
       if (isPipelineEdge) {
@@ -767,7 +796,7 @@ const DataLineagePage = () => {
     setNodes(flowNodes);
     setEdges(flowEdges);
       } else {
-        // Fallback: use old method if API fails
+        
         const rawNodes = fullLineageData.rawData.nodes;
         const rawEdges = fullLineageData.rawData.edges;
         
@@ -790,7 +819,7 @@ const DataLineagePage = () => {
         );
         const layoutedNodes = layoutNodes(filteredNodes, filteredEdges);
         
-        // Use existing flowNodes/flowEdges logic for fallback
+        
         const flowNodes = layoutedNodes.map((node) => ({
           id: node.id,
           type: 'custom',
@@ -2293,7 +2322,7 @@ const DataLineagePage = () => {
       </Dialog>
 
       {}
-      {/* Impact Analysis Dialog */}
+      {}
       <Dialog
         open={showImpactAnalysis}
         onClose={() => setShowImpactAnalysis(false)}
@@ -2417,8 +2446,11 @@ const DataLineagePage = () => {
       <ManualLineageDialog
         open={manualLineageOpen}
         onClose={() => setManualLineageOpen(false)}
+        assets={assets}
         onSuccess={() => {
+          // Refresh both lineage + assets (so dropdown includes new discoveries)
           fetchLineage();
+          fetchAssets();
         }}
       />
     </Box>

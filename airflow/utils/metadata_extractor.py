@@ -9,7 +9,7 @@ from collections import Counter
 
 logger = logging.getLogger(__name__)
 
-# Import Azure DLP client for PII detection
+
 try:
     from .azure_dlp_client import detect_pii_in_column
     AZURE_DLP_AVAILABLE = True
@@ -22,25 +22,25 @@ except ImportError:
 
 
 def generate_file_hash(file_content: bytes) -> str:
-    # Use SHAKE128 (128 bits) only for file hashing
+
     hash_obj = hashlib.shake_128(file_content)
-    return hash_obj.hexdigest(16)  # 16 bytes = 128 bits
+    return hash_obj.hexdigest(16)
 
 
 def extract_parquet_schema(file_content: bytes) -> Dict:
-    # Extract Parquet schema from file content. Parquet metadata is at the end of the file
-    # We need the tail of the file (last 8KB) which contains the schema metadata
-    # This function should receive the tail bytes, not the head
+
+
+
     try:
         parquet_file = pq.ParquetFile(io.BytesIO(file_content))
         schema = parquet_file.schema_arrow
         
-        # Read sample data (first 10 rows) for PII detection
+
         sample_data = None
         try:
             table = parquet_file.read_row_group(0) if parquet_file.num_row_groups > 0 else None
             if table is not None:
-                # Get first 10 rows as sample
+
                 sample_table = table.slice(0, min(10, len(table)))
                 sample_data = sample_table.to_pandas().to_dict('list')
         except Exception as e:
@@ -51,12 +51,12 @@ def extract_parquet_schema(file_content: bytes) -> Dict:
         for i in range(len(schema)):
             field = schema.field(i)
             
-            # Extract sample data for this column
+
             column_samples = None
             if sample_data and field.name in sample_data:
                 column_samples = [str(val) for val in sample_data[field.name][:10] if val is not None]
             
-            # Detect PII using Azure DLP (column name + sample data)
+
             pii_result = detect_pii_in_column(field.name, column_samples)
             
             column_data = {
@@ -65,7 +65,7 @@ def extract_parquet_schema(file_content: bytes) -> Dict:
                 "nullable": field.nullable
             }
             
-            # Add PII detection results if available
+
             if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
                 column_data["pii_detected"] = True
                 column_data["pii_types"] = pii_result.get("pii_types", [])
@@ -97,11 +97,11 @@ def extract_parquet_schema(file_content: bytes) -> Dict:
 def generate_schema_hash(schema_json: Dict) -> str:
     schema_str = json.dumps(schema_json, sort_keys=True)
     hash_obj = hashlib.shake_128(schema_str.encode())
-    return hash_obj.hexdigest(16)  # 16 bytes = 128 bits
+    return hash_obj.hexdigest(16)
 
 
 def extract_csv_schema(file_content: bytes, sample_size: int = 0) -> Dict:
-    # Extract CSV schema from headers and sample data for PII detection
+
     try:
         content_str = file_content.decode('utf-8', errors='ignore')
         lines = content_str.split('\n')
@@ -109,16 +109,16 @@ def extract_csv_schema(file_content: bytes, sample_size: int = 0) -> Dict:
         if not lines:
             return {"columns": [], "num_columns": 0}
         
-        # Read headers (first line)
+
         reader = csv.reader([lines[0]])
         headers = next(reader, None)
         
         if not headers:
             return {"columns": [], "num_columns": 0}
         
-        # Read sample data rows for PII detection (up to 10 rows)
+
         sample_rows = []
-        for line in lines[1:11]:  # Get up to 10 data rows
+        for line in lines[1:11]:
             if line.strip():
                 try:
                     row_reader = csv.reader([line])
@@ -135,23 +135,23 @@ def extract_csv_schema(file_content: bytes, sample_size: int = 0) -> Dict:
             if not header:
                 header = f"column_{i+1}"
             
-            # Extract sample data for this column
+
             column_samples = []
             if sample_rows:
                 for row in sample_rows:
                     if i < len(row) and row[i]:
                         column_samples.append(str(row[i]).strip())
             
-            # Detect PII using Azure DLP (column name + sample data)
+
             pii_result = detect_pii_in_column(header, column_samples if column_samples else None)
             
             column_data = {
                 "name": header,
-                "type": "string",  # Default type since we don't have data samples
+                "type": "string",
                 "nullable": True
             }
             
-            # Add PII detection results if available
+
             if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
                 column_data["pii_detected"] = True
                 column_data["pii_types"] = pii_result.get("pii_types", [])
@@ -164,7 +164,7 @@ def extract_csv_schema(file_content: bytes, sample_size: int = 0) -> Dict:
         return {
             "columns": columns,
             "num_columns": len(columns),
-            "num_rows": None,  # Don't know full row count
+            "num_rows": None,
             "has_header": True,
             "delimiter": ","
         }
@@ -246,22 +246,22 @@ def extract_json_schema(file_content: bytes) -> Dict:
         columns = []
         
         if isinstance(data, dict):
-            # Single object - extract keys and sample values for PII detection
+
             for key in data.keys():
-                # Get sample value for this column
+
                 sample_value = str(data.get(key, "")) if data.get(key) is not None else None
                 column_samples = [sample_value] if sample_value else None
                 
-                # Detect PII using Azure DLP (column name + sample data)
+
                 pii_result = detect_pii_in_column(str(key), column_samples)
                 
                 column_data = {
                     "name": str(key),
-                    "type": "string",  # Default type
+                    "type": "string",
                     "nullable": True
                 }
                 
-                # Add PII detection results if available
+
                 if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
@@ -273,24 +273,24 @@ def extract_json_schema(file_content: bytes) -> Dict:
         elif isinstance(data, list) and len(data) > 0:
             first_item = data[0]
             if isinstance(first_item, dict):
-                # Extract columns from first item and collect sample values from multiple items
+
                 for key in first_item.keys():
-                    # Collect sample values from first 10 items
+
                     column_samples = []
                     for item in data[:10]:
                         if isinstance(item, dict) and key in item and item[key] is not None:
                             column_samples.append(str(item[key]))
                     
-                    # Detect PII using Azure DLP (column name + sample data)
+
                     pii_result = detect_pii_in_column(str(key), column_samples if column_samples else None)
                     
                     column_data = {
                         "name": str(key),
-                        "type": "string",  # Default type
+                        "type": "string",
                         "nullable": True
                     }
                     
-                    # Add PII detection results if available
+
                     if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
                         column_data["pii_detected"] = True
                         column_data["pii_types"] = pii_result.get("pii_types", [])
@@ -409,7 +409,7 @@ def extract_file_metadata(blob_info: Dict, file_content: Optional[bytes] = None)
         except Exception as e:
             logger.warning('FN:extract_file_metadata file_name:{} file_format:{} error:{}'.format(file_name, file_format, str(e)))
             schema_json = {}
-            schema_hash = hashlib.shake_128(b"").hexdigest(16)  # 16 bytes = 128 bits
+            schema_hash = hashlib.shake_128(b"").hexdigest(16)
     elif file_format == "csv" and file_content:
         try:
             schema_json = extract_csv_schema(file_content)
@@ -417,7 +417,7 @@ def extract_file_metadata(blob_info: Dict, file_content: Optional[bytes] = None)
         except Exception as e:
             logger.warning('FN:extract_file_metadata file_name:{} file_format:{} error:{}'.format(file_name, file_format, str(e)))
             schema_json = {}
-            schema_hash = hashlib.shake_128(b"").hexdigest(16)  # 16 bytes = 128 bits
+            schema_hash = hashlib.shake_128(b"").hexdigest(16)
     elif file_format == "json" and file_content:
         try:
             schema_json = extract_json_schema(file_content)
@@ -425,10 +425,10 @@ def extract_file_metadata(blob_info: Dict, file_content: Optional[bytes] = None)
         except Exception as e:
             logger.warning('FN:extract_file_metadata file_name:{} file_format:{} error:{}'.format(file_name, file_format, str(e)))
             schema_json = {}
-            schema_hash = hashlib.shake_128(b"").hexdigest(16)  # 16 bytes = 128 bits
+            schema_hash = hashlib.shake_128(b"").hexdigest(16)
     else:
         schema_json = {}
-        schema_hash = hashlib.shake_128(json.dumps({}).encode()).hexdigest(16)  # 16 bytes = 128 bits
+        schema_hash = hashlib.shake_128(json.dumps({}).encode()).hexdigest(16)
     
     storage_metadata = {
         "azure": {

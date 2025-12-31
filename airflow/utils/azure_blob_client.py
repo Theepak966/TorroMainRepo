@@ -3,7 +3,7 @@ from azure.identity import ClientSecretCredential
 from typing import List, Dict, Optional, Union
 import logging
 
-# Data Lake Gen2 support
+
 try:
     from azure.storage.filedatalake import DataLakeServiceClient
     DATALAKE_AVAILABLE = True
@@ -15,39 +15,22 @@ logger = logging.getLogger(__name__)
 
 
 def create_azure_blob_client(config: Dict) -> 'AzureBlobClient':
-    """
-    Create an AzureBlobClient from a connection config dictionary.
-    
-    Supports both connection string and service principal authentication.
-    
-    Args:
-        config: Dictionary containing either:
-            - connection_string: For connection string auth
-            - OR service principal fields:
-                - account_name: Storage account name
-                - tenant_id: Azure AD tenant ID
-                - client_id: Service principal client ID (application ID)
-                - client_secret: Service principal client secret
-    
-    Returns:
-        AzureBlobClient instance
-    """
-    # Try connection string first (backward compatibility)
+
     connection_string = config.get('connection_string')
     if connection_string:
         return AzureBlobClient(connection_string=connection_string)
     
-    # Try service principal authentication
+
     account_name = config.get('account_name')
     tenant_id = config.get('tenant_id')
     client_id = config.get('client_id')
     client_secret = config.get('client_secret')
     
     if account_name and tenant_id and client_id and client_secret:
-        # Check if we should use DFS endpoint for Data Lake Gen2
+
         use_dfs = config.get('use_dfs_endpoint', False) or config.get('storage_type') == 'datalake'
         
-        # Create credential
+
         credential = ClientSecretCredential(
             tenant_id=tenant_id,
             client_id=client_id,
@@ -55,11 +38,11 @@ def create_azure_blob_client(config: Dict) -> 'AzureBlobClient':
         )
         
         if use_dfs:
-            # For Data Lake Gen2, use DFS endpoint
+
             dfs_account_url = f"https://{account_name}.dfs.core.windows.net"
             return AzureBlobClient(dfs_account_url=dfs_account_url, dfs_credential=credential)
         else:
-            # Use blob endpoint (works for both Blob Storage and Data Lake Gen2)
+
             account_url = f"https://{account_name}.blob.core.windows.net"
             return AzureBlobClient(account_url=account_url, credential=credential)
     
@@ -75,28 +58,18 @@ class AzureBlobClient:
                  credential: Optional[ClientSecretCredential] = None,
                  dfs_account_url: Optional[str] = None,
                  dfs_credential: Optional[ClientSecretCredential] = None):
-        """
-        Initialize Azure Blob Client with either connection string or service principal credentials.
-        
-        Args:
-            connection_string: Azure Storage connection string (for connection string auth)
-            account_url: Azure Storage account URL (https://<account_name>.blob.core.windows.net) (for service principal)
-            credential: ClientSecretCredential object (for service principal auth)
-            dfs_account_url: Azure Data Lake Gen2 DFS endpoint (https://<account_name>.dfs.core.windows.net)
-            dfs_credential: ClientSecretCredential for DFS endpoint
-        """
         if connection_string:
             self.connection_string = connection_string
             self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
             self.auth_method = "connection_string"
         elif dfs_account_url and dfs_credential:
-            # Use Data Lake Gen2 DFS endpoint
+
             if not DATALAKE_AVAILABLE:
                 raise ImportError("azure-storage-filedatalake package is required for Data Lake Gen2 support. Install it with: pip install azure-storage-filedatalake")
             self.dfs_account_url = dfs_account_url
             self.dfs_credential = dfs_credential
             self.data_lake_service_client = DataLakeServiceClient(account_url=dfs_account_url, credential=dfs_credential)
-            # Access underlying blob client from DataLakeServiceClient
+
             self.blob_service_client = self.data_lake_service_client._blob_service_client
             self.auth_method = "service_principal_dfs"
         elif account_url and credential:
@@ -113,9 +86,9 @@ class AzureBlobClient:
             blobs = []
             
             prefix = folder_path.rstrip("/") + "/" if folder_path else ""
-            # CRITICAL FIX: Convert lazy iterator to list immediately to avoid hanging
-            # The iterator can hang on pagination if there are many blobs
-            # Convert to list immediately - this will fetch all pages in one go
+
+
+
             blob_list = []
             count = 0
             try:
@@ -123,7 +96,7 @@ class AzureBlobClient:
                 for blob in blob_iterator:
                     blob_list.append(blob)
                     count += 1
-                    # Safety limit: prevent infinite loops or memory issues
+
                     if count > 10000:
                         logger.warning('FN:list_blobs container_name:{} folder_path:{} hit_safety_limit:10000'.format(container_name, folder_path))
                         break
@@ -136,19 +109,19 @@ class AzureBlobClient:
                 if file_extensions:
                     if not any(blob.name.lower().endswith(ext.lower()) for ext in file_extensions):
                         continue
-                # Skip directories (blobs ending with /)
+
                 if blob.name.endswith('/'):
                     continue
                 
-                # CRITICAL FIX: Use properties directly from list_blobs() - NO extra API calls!
-                # This was causing tasks to hang/timeout. list_blobs() already has all properties we need.
+
+
                 class BlobPropertiesProxy:
                     def __init__(self, blob_item):
                         self.size = getattr(blob_item, 'size', 0)
                         self.etag = getattr(blob_item, 'etag', '').strip('"') if hasattr(blob_item, 'etag') else ''
                         self.creation_time = getattr(blob_item, 'creation_time', None)
                         self.last_modified = getattr(blob_item, 'last_modified', None)
-                        # Content settings from blob properties
+
                         content_type = getattr(blob_item, 'content_type', 'application/octet-stream')
                         self.content_settings = type('ContentSettings', (), {
                             'content_type': content_type,
@@ -207,33 +180,33 @@ class AzureBlobClient:
             raise
     
     def get_blob_sample(self, container_name: str, blob_path: str, max_bytes: int = 1024) -> bytes:
-        # Get only headers/column names (first N bytes) - NO data rows
-        # For banking/financial compliance: We only extract column names, never actual data
-        # CSV: First line only (headers)
-        # JSON: First object keys only
+
+
+
+
         try:
             blob_client = self.blob_service_client.get_blob_client(
                 container=container_name,
                 blob=blob_path
             )
-            # Download only first max_bytes (just enough for headers/keys - NO data)
+
             return blob_client.download_blob(offset=0, length=max_bytes).readall()
         except Exception as e:
             logger.warning('FN:get_blob_sample container_name:{} blob_path:{} max_bytes:{} error:{}'.format(container_name, blob_path, max_bytes, str(e)))
             return b""
     
     def get_blob_tail(self, container_name: str, blob_path: str, max_bytes: int = 8192) -> bytes:
-        # Get the tail (last N bytes) of a blob. Useful for Parquet files where metadata is at the end
+
         try:
             blob_client = self.blob_service_client.get_blob_client(
                 container=container_name,
                 blob=blob_path
             )
-            # Get file size first
+
             properties = blob_client.get_blob_properties()
             file_size = properties.size
             
-            # Read from the end
+
             offset = max(0, file_size - max_bytes)
             length = min(max_bytes, file_size)
             return blob_client.download_blob(offset=offset, length=length).readall()
@@ -280,7 +253,6 @@ class AzureBlobClient:
             raise
     
     def list_containers(self) -> List[Dict]:
-        """List all containers in the storage account"""
         try:
             containers = []
             container_list = list(self.blob_service_client.list_containers())
@@ -301,14 +273,13 @@ class AzureBlobClient:
             raise
     
     def test_connection(self) -> Dict:
-        """Test the Azure connection"""
         try:
             containers = self.list_containers()
             return {
                 "success": True,
                 "message": "Connection successful",
                 "container_count": len(containers),
-                "containers": [c["name"] for c in containers[:10]]  # First 10 containers
+                "containers": [c["name"] for c in containers[:10]]
             }
         except Exception as e:
             error_msg = str(e)

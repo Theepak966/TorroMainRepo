@@ -5,10 +5,10 @@ from sqlalchemy.pool import QueuePool
 import os
 from urllib.parse import quote_plus
 
-# Import config to ensure .env is loaded and use config values
+
 try:
     from config import config
-    # Get the active config (development, production, or default)
+
     env = os.getenv("FLASK_ENV", "development")
     active_config = config.get(env, config["default"])
     
@@ -21,7 +21,7 @@ try:
     DB_MAX_OVERFLOW = active_config.DB_MAX_OVERFLOW
     DB_POOL_RECYCLE = active_config.DB_POOL_RECYCLE
 except ImportError:
-    # Fallback if config not available (shouldn't happen in normal operation)
+
     from dotenv import load_dotenv
     from pathlib import Path
     
@@ -29,7 +29,7 @@ except ImportError:
     env_path = backend_dir / '.env'
     load_dotenv(env_path)
     
-    # DB_HOST should be set in .env file (no default to force explicit configuration)
+
     DB_HOST = os.getenv("DB_HOST", "")
     DB_PORT = os.getenv("DB_PORT", "3306")
     DB_USER = os.getenv("DB_USER", "root")
@@ -39,7 +39,7 @@ except ImportError:
     DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "75"))
     DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
     
-    # Validate required database configuration
+
     if not DB_HOST:
         raise ValueError("DB_HOST must be set in backend/.env file. Cannot use default 'localhost'.")
 
@@ -55,11 +55,11 @@ else:
 if os.getenv("DATABASE_URL"):
     DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Connection pool configuration for production (20-30 concurrent users)
-# pool_size: Base connections always available (75 = ~3 per user for 25 users)
-# max_overflow: Additional connections during peak load (75 = total max 150)
-# This handles 20-30 concurrent users with 2-3 requests per user
-# Values are now loaded from config above
+
+
+
+
+
 POOL_SIZE = DB_POOL_SIZE
 MAX_OVERFLOW = DB_MAX_OVERFLOW
 POOL_RECYCLE = DB_POOL_RECYCLE
@@ -74,8 +74,8 @@ engine = create_engine(
     echo=os.getenv("SQL_ECHO", "false").lower() == "true",
     connect_args={
         "connect_timeout": 10,
-        "read_timeout": 120,  # Increased for large queries (4000+ files)
-        "write_timeout": 180  # Increased for large batch commits (4000+ files = 2-3 batches)
+        "read_timeout": 120,
+        "write_timeout": 180
     }
 )
 

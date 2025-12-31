@@ -6,20 +6,19 @@ from azure.ai.textanalytics import TextAnalyticsClient
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Load .env from backend directory
+
 backend_dir = Path(__file__).parent.parent
 env_path = backend_dir / '.env'
 load_dotenv(env_path)
 
 logger = logging.getLogger(__name__)
 
-# Azure AI Language (PII Detection) configuration
+
 AZURE_AI_LANGUAGE_ENDPOINT = os.getenv("AZURE_AI_LANGUAGE_ENDPOINT", "")
 AZURE_AI_LANGUAGE_KEY = os.getenv("AZURE_AI_LANGUAGE_KEY", "")
 
 
 class AzureDLPClient:
-    """Client for Azure AI Language PII detection"""
     
     def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None):
         self.endpoint = endpoint or AZURE_AI_LANGUAGE_ENDPOINT
@@ -30,7 +29,7 @@ class AzureDLPClient:
             self.client = None
         else:
             try:
-                # Remove trailing slash if present (TextAnalyticsClient expects no trailing slash)
+
                 endpoint_clean = self.endpoint.rstrip('/')
                 credential = AzureKeyCredential(self.key)
                 self.client = TextAnalyticsClient(endpoint=endpoint_clean, credential=credential)
@@ -40,16 +39,6 @@ class AzureDLPClient:
                 self.client = None
     
     def detect_pii_in_text(self, text: str, language: str = "en") -> Dict:
-        """
-        Detect PII in a text string using Azure AI Language service
-        
-        Args:
-            text: Text to analyze
-            language: Language code (default: "en")
-        
-        Returns:
-            Dict with pii_detected (bool), pii_types (list), and confidence scores
-        """
         if not self.client or not text:
             return {
                 "pii_detected": False,
@@ -58,11 +47,11 @@ class AzureDLPClient:
             }
         
         try:
-            # Azure AI Language API has a limit of 5120 characters per document
-            # For column names, this should be fine, but we'll truncate if needed
+
+
             text_to_analyze = text[:5120] if len(text) > 5120 else text
             
-            # Call PII detection API
+
             result = self.client.recognize_pii_entities([text_to_analyze], language=language)
             
             if not result or len(result) == 0:
@@ -74,7 +63,7 @@ class AzureDLPClient:
             
             document_result = result[0]
             
-            # Check for errors
+
             if document_result.is_error:
                 logger.warning('FN:detect_pii_in_text text_length:{} language:{} error:{}'.format(len(text_to_analyze), language, document_result.error))
                 return {
@@ -83,7 +72,7 @@ class AzureDLPClient:
                     "entities": []
                 }
             
-            # Extract PII entities
+
             entities = []
             pii_types = []
             
@@ -97,7 +86,7 @@ class AzureDLPClient:
                     "length": entity.length
                 })
                 
-                # Add category to pii_types if not already present
+
                 category = entity.subcategory or entity.category
                 if category and category not in pii_types:
                     pii_types.append(category)
@@ -117,23 +106,13 @@ class AzureDLPClient:
             }
     
     def detect_pii_in_column_name(self, column_name: str, sample_data: Optional[List[str]] = None) -> Dict:
-        """
-        Detect PII in a column name and/or sample data using Azure DLP
-        
-        Args:
-            column_name: Column name to analyze
-            sample_data: Optional list of sample values from the column
-        
-        Returns:
-            Dict with pii_detected (bool) and pii_types (list)
-        """
         if not column_name:
             return {
                 "pii_detected": False,
                 "pii_types": []
             }
         
-        # Use Azure DLP to detect PII
+
         if not self.client:
             logger.warning('FN:detect_pii_in_column_name column_name:{} message:Azure DLP client not configured'.format(column_name))
             return {
@@ -144,40 +123,39 @@ class AzureDLPClient:
         all_pii_types = []
         pii_detected = False
         
-        # 1. Analyze the column name itself
+
         name_result = self.detect_pii_in_text(column_name)
         if name_result.get("pii_detected"):
             pii_detected = True
             all_pii_types.extend(name_result.get("pii_types", []))
         
-        # 2. Analyze sample data from the column (if available)
+
         if sample_data:
-            # Combine sample values into a text string for analysis
-            # Azure DLP can analyze up to 5120 characters per document
-            sample_text = " ".join(str(val) for val in sample_data[:10])  # Analyze first 10 samples
-            sample_text = sample_text[:5120]  # Truncate if too long
+
+
+            sample_text = " ".join(str(val) for val in sample_data[:10])
+            sample_text = sample_text[:5120]
             
             if sample_text.strip():
                 sample_result = self.detect_pii_in_text(sample_text)
                 if sample_result.get("pii_detected"):
                     pii_detected = True
-                    # Add new PII types found in sample data
+
                     for pii_type in sample_result.get("pii_types", []):
                         if pii_type not in all_pii_types:
                             all_pii_types.append(pii_type)
         
         return {
             "pii_detected": pii_detected,
-            "pii_types": list(set(all_pii_types))  # Remove duplicates
+            "pii_types": list(set(all_pii_types))
         }
 
 
-# Global instance (initialized on first use)
+
 _dlp_client = None
 
 
 def get_dlp_client() -> Optional[AzureDLPClient]:
-    """Get or create the global Azure DLP client instance"""
     global _dlp_client
     if _dlp_client is None:
         _dlp_client = AzureDLPClient()
@@ -185,32 +163,17 @@ def get_dlp_client() -> Optional[AzureDLPClient]:
 
 
 def detect_pii_in_column(column_name: str, sample_data: Optional[List[str]] = None) -> Dict:
-    """
-    Convenience function to detect PII in a column name and/or sample data using Azure DLP
-    Falls back to pattern-based detection if Azure DLP is not configured
-    
-    Args:
-        column_name: Column name to analyze
-        sample_data: Optional list of sample values from the column
-    
-    Returns:
-        Dict with pii_detected (bool) and pii_types (list)
-    """
     client = get_dlp_client()
     
-    # Try Azure DLP first if available
+
     if client and client.client:
         return client.detect_pii_in_column_name(column_name, sample_data)
     
-    # Fallback to pattern-based detection if Azure DLP is not configured
+
     return _detect_pii_pattern_based(column_name, sample_data)
 
 
 def _detect_pii_pattern_based(column_name: str, sample_data: Optional[List[str]] = None) -> Dict:
-    """
-    Pattern-based PII detection fallback when Azure DLP is not available
-    Uses regex patterns to detect common PII types
-    """
     import re
     
     if not column_name:
@@ -271,7 +234,7 @@ def _detect_pii_pattern_based(column_name: str, sample_data: Optional[List[str]]
     detected_types = []
     column_lower = column_name.lower()
     
-    # Check column name against patterns
+
     for pii_type, patterns in pii_patterns.items():
         for pattern in patterns:
             if pattern.search(column_name):
@@ -279,26 +242,26 @@ def _detect_pii_pattern_based(column_name: str, sample_data: Optional[List[str]]
                     detected_types.append(pii_type)
                 break
     
-    # Check sample data for PII patterns
+
     if sample_data:
         sample_text = " ".join(str(val) for val in sample_data[:10])
         
-        # Email pattern
+
         email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
         if email_pattern.search(sample_text) and 'Email' not in detected_types:
             detected_types.append('Email')
         
-        # Phone pattern
+
         phone_pattern = re.compile(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b|\b\(\d{3}\)\s?\d{3}[-.]?\d{4}\b')
         if phone_pattern.search(sample_text) and 'PhoneNumber' not in detected_types:
             detected_types.append('PhoneNumber')
         
-        # SSN pattern
+
         ssn_pattern = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
         if ssn_pattern.search(sample_text) and 'SSN' not in detected_types:
             detected_types.append('SSN')
         
-        # Credit card pattern
+
         cc_pattern = re.compile(r'\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b')
         if cc_pattern.search(sample_text) and 'CreditCard' not in detected_types:
             detected_types.append('CreditCard')

@@ -1,7 +1,3 @@
-"""
-Data Quality Integration with Lineage
-Calculates quality metrics and links them to lineage relationships
-"""
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -10,15 +6,6 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_asset_quality_score(asset: Dict) -> Dict:
-    """
-    Calculate data quality score for an asset
-    
-    Args:
-        asset: Asset dictionary with columns and metadata
-    
-    Returns:
-        Dict with quality_score, quality_metrics, quality_issues
-    """
     quality_metrics = {
         'completeness': 1.0,
         'uniqueness': 1.0,
@@ -39,7 +26,7 @@ def calculate_asset_quality_score(asset: Dict) -> Dict:
             'quality_issues': quality_issues
         }
     
-    # Completeness: Check for null columns
+
     total_columns = len(columns)
     nullable_columns = sum(1 for col in columns if col.get('nullable', False))
     completeness = 1.0 - (nullable_columns / total_columns) if total_columns > 0 else 0.0
@@ -48,7 +35,7 @@ def calculate_asset_quality_score(asset: Dict) -> Dict:
     if nullable_columns > total_columns * 0.5:
         quality_issues.append(f'High number of nullable columns ({nullable_columns}/{total_columns})')
     
-    # Uniqueness: Check for unique constraints or primary keys
+
     unique_columns = sum(1 for col in columns if col.get('unique', False) or col.get('primary_key', False))
     uniqueness = unique_columns / total_columns if total_columns > 0 else 0.0
     quality_metrics['uniqueness'] = uniqueness
@@ -56,21 +43,21 @@ def calculate_asset_quality_score(asset: Dict) -> Dict:
     if unique_columns == 0:
         quality_issues.append('No unique constraints or primary keys found')
     
-    # Validity: Check for PII detection (if PII is detected, validity might be lower)
+
     pii_columns = sum(1 for col in columns if col.get('pii_detected', False))
     if pii_columns > 0:
-        # PII is valid, but we track it
+
         validity = 1.0
     else:
         validity = 1.0
     quality_metrics['validity'] = validity
     
-    # Consistency: Check column naming patterns
+
     naming_patterns = {}
     for col in columns:
         col_name = col.get('name', '')
         if col_name:
-            # Check for consistent naming (snake_case, camelCase, etc.)
+
             if '_' in col_name:
                 naming_patterns['snake_case'] = naming_patterns.get('snake_case', 0) + 1
             elif col_name[0].islower() and any(c.isupper() for c in col_name[1:]):
@@ -82,7 +69,7 @@ def calculate_asset_quality_score(asset: Dict) -> Dict:
     else:
         quality_metrics['consistency'] = 1.0
     
-    # Timeliness: Check last_modified date
+
     last_modified = asset.get('last_modified')
     if last_modified:
         try:
@@ -98,13 +85,13 @@ def calculate_asset_quality_score(asset: Dict) -> Dict:
                 quality_metrics['timeliness'] = max(0.0, 1.0 - (days_since_update / 365))
             else:
                 quality_metrics['timeliness'] = 1.0
-        except:
+        except Exception:
             quality_metrics['timeliness'] = 0.5
     else:
         quality_metrics['timeliness'] = 0.5
         quality_issues.append('No last_modified date available')
     
-    # Calculate overall quality score (weighted average)
+
     weights = {
         'completeness': 0.3,
         'uniqueness': 0.2,
@@ -131,33 +118,22 @@ def propagate_quality_through_lineage(
     target_quality: Dict,
     relationship: Dict
 ) -> Dict:
-    """
-    Calculate how quality propagates through a lineage relationship
-    
-    Args:
-        source_quality: Quality metrics of source asset
-        target_quality: Quality metrics of target asset
-        relationship: Lineage relationship dict
-    
-    Returns:
-        Dict with propagated_quality and impact_analysis
-    """
     source_score = source_quality.get('quality_score', 1.0)
     target_score = target_quality.get('quality_score', 1.0)
     
-    # Quality degradation factor (quality typically degrades through transformations)
+
     transformation_type = relationship.get('transformation_type', 'pass_through')
     degradation_factors = {
-        'pass_through': 0.95,  # 5% degradation
-        'aggregate': 0.90,     # 10% degradation
-        'transform': 0.85,     # 15% degradation
-        'join': 0.80,          # 20% degradation
+        'pass_through': 0.95,
+        'aggregate': 0.90,
+        'transform': 0.85,
+        'join': 0.80,
     }
     
     degradation = degradation_factors.get(transformation_type, 0.90)
     expected_target_score = source_score * degradation
     
-    # Calculate quality impact
+
     quality_impact = {
         'source_quality': source_score,
         'expected_target_quality': expected_target_score,

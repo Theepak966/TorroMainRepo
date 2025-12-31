@@ -31,7 +31,7 @@ import {
   Description,
 } from '@mui/icons-material';
 
-const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
+const ManualLineageDialog = ({ open, onClose, onSuccess, assets: assetsProp = null }) => {
   const [activeTab, setActiveTab] = useState('form');
   const [sourceAsset, setSourceAsset] = useState(null);
   const [targetAsset, setTargetAsset] = useState(null);
@@ -47,24 +47,61 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  React.useEffect(() => {
-    if (open) {
-      fetchAssets();
-    }
-  }, [open]);
+  const fetchAllAssets = async () => {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-  const fetchAssets = async () => {
-    try {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets`);
-      if (response.ok) {
-        const data = await response.json();
-        setAssets(data);
-      }
-    } catch (error) {
-      console.error('Error fetching assets:', error);
+    // Prefer paginated endpoint; fall back to old array response.
+    const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=500`);
+    if (!firstResp.ok) return [];
+
+    const firstData = await firstResp.json();
+    if (Array.isArray(firstData)) {
+      return firstData;
     }
+
+    if (!firstData || !Array.isArray(firstData.assets) || !firstData.pagination) {
+      return [];
+    }
+
+    const all = [...firstData.assets];
+    const totalPages = Number(firstData.pagination.total_pages || 1);
+    const cappedTotalPages = Math.min(totalPages, 200);
+
+    for (let p = 2; p <= cappedTotalPages; p++) {
+      const resp = await fetch(`${API_BASE_URL}/api/assets?page=${p}&per_page=500`);
+      if (!resp.ok) break;
+      const data = await resp.json();
+      if (data && Array.isArray(data.assets)) {
+        all.push(...data.assets);
+      } else {
+        break;
+      }
+    }
+
+    return all;
   };
+
+  React.useEffect(() => {
+    if (!open) return;
+
+    // If parent provides assets (already pagination-safe), use them.
+    if (Array.isArray(assetsProp) && assetsProp.length >= 0) {
+      setAssets(assetsProp);
+      return;
+    }
+
+    // Otherwise fetch all assets (pagination-safe)
+    (async () => {
+      try {
+        const allAssets = await fetchAllAssets();
+        setAssets(allAssets);
+      } catch (error) {
+        console.error('Error fetching assets:', error);
+      }
+    })();
+  }, [open, assetsProp]);
+
+  // NOTE: legacy fetchAssets removed; pagination-safe fetchAllAssets is used instead.
 
   const handleAddColumnMapping = () => {
     if (sourceColumn && targetColumn) {
@@ -94,6 +131,19 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
 
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+      // If user typed a mapping but forgot to click "Add", include it automatically.
+      const trimmedSource = (sourceColumn || '').trim();
+      const trimmedTarget = (targetColumn || '').trim();
+      const finalColumnMappings = [...columnMappings];
+      if (trimmedSource && trimmedTarget) {
+        finalColumnMappings.push({
+          source_column: trimmedSource,
+          target_column: trimmedTarget,
+          relationship_type: 'direct_match',
+        });
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/lineage/relationships`, {
         method: 'POST',
         headers: {
@@ -103,7 +153,7 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
           source_asset_id: sourceAsset.id,
           target_asset_id: targetAsset.id,
           relationship_type: relationship,
-          column_lineage: columnMappings.length > 0 ? columnMappings.map(m => ({
+          column_lineage: finalColumnMappings.length > 0 ? finalColumnMappings.map(m => ({
             source_column: m.source_column,
             target_column: m.target_column,
             transformation: 'pass_through',
@@ -117,6 +167,9 @@ const ManualLineageDialog = ({ open, onClose, onSuccess }) => {
 
       if (response.ok) {
         setSuccess('Manual lineage relation created successfully!');
+        // Clear any typed-but-not-added mapping fields once submitted
+        setSourceColumn('');
+        setTargetColumn('');
         setTimeout(() => {
           onSuccess && onSuccess();
           handleClose();

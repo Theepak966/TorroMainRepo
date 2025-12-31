@@ -9,12 +9,12 @@ backlog = 2048
 workers = multiprocessing.cpu_count() * 2 + 1
 worker_class = "sync"
 worker_connections = 1000
-timeout = 600  # Increased to 10 minutes for large discovery operations (4000+ files)
+timeout = 600
 keepalive = 2
 
-# Use relative paths - logs directory relative to backend directory
 
-# Get backend directory (where this config file is located)
+
+
 backend_dir = Path(__file__).parent
 logs_dir = backend_dir.parent / "logs"
 logs_dir.mkdir(exist_ok=True)

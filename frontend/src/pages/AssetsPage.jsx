@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -47,10 +48,10 @@ import {
 } from '@mui/icons-material';
 
 const AssetsPage = () => {
+  const navigate = useNavigate();
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [discoveryIdSearch, setDiscoveryIdSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [catalogFilter, setCatalogFilter] = useState('');
   const [approvalStatusFilter, setApprovalStatusFilter] = useState('');
@@ -63,12 +64,12 @@ const AssetsPage = () => {
   const [originalSensitivityLevel, setOriginalSensitivityLevel] = useState('medium');
   const [savingMetadata, setSavingMetadata] = useState(false);
   
-  // Rejection dialog state
+  
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [assetToReject, setAssetToReject] = useState(null);
   
-  // Discovery details dialog state
+  
   const [discoveryDetailsOpen, setDiscoveryDetailsOpen] = useState(false);
   const [discoveryDetails, setDiscoveryDetails] = useState(null);
   
@@ -80,24 +81,49 @@ const AssetsPage = () => {
 
   useEffect(() => {
     fetchAssets();
-  }, [currentPage, pageSize, searchTerm, discoveryIdSearch, typeFilter, catalogFilter, approvalStatusFilter]);
+  }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter, approvalStatusFilter]);
 
   const fetchAssets = async (pageOverride = null) => {
       setLoading(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      // If discovery_id is provided, search by it
-      const url = discoveryIdSearch 
-        ? `${API_BASE_URL}/api/assets?discovery_id=${discoveryIdSearch}`
-        : `${API_BASE_URL}/api/assets`;
+      
+      const page = pageOverride !== null ? pageOverride : currentPage;
+      const pageParam = page + 1; // Backend uses 1-based pagination
+      
+      const url = `${API_BASE_URL}/api/assets?page=${pageParam}&per_page=${pageSize}`;
+      
       const response = await fetch(url);
       if (response.ok) {
-      const data = await response.json();
-        setAllAssets(data);
-        setTotalAssets(data.length);
+        const data = await response.json();
         
+        // Handle both old format (array) and new format (paginated object)
+        let assetsList = [];
+        let total = 0;
+        let totalPagesCount = 0;
         
-        let filtered = data;
+        if (Array.isArray(data)) {
+          // Old format - backward compatibility
+          assetsList = data;
+          total = data.length;
+          totalPagesCount = Math.ceil(data.length / pageSize);
+        } else if (data.assets && data.pagination) {
+          // New paginated format
+          assetsList = data.assets;
+          total = data.pagination.total;
+          totalPagesCount = data.pagination.total_pages;
+        } else {
+          assetsList = [];
+          total = 0;
+          totalPagesCount = 0;
+        }
+        
+        setAllAssets(assetsList);
+        setTotalAssets(total);
+        setTotalPages(totalPagesCount);
+        
+        // Client-side filtering (if needed for search/filters)
+        let filtered = assetsList;
         if (searchTerm) {
           filtered = filtered.filter(asset => 
             asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -117,12 +143,7 @@ const AssetsPage = () => {
           });
         }
         
-        
-        const page = pageOverride !== null ? pageOverride : currentPage;
-        const start = page * pageSize;
-        const end = start + pageSize;
-        setAssets(filtered.slice(start, end));
-        setTotalPages(Math.ceil(filtered.length / pageSize));
+        setAssets(filtered);
         } else {
         setAssets([]);
         setTotalAssets(0);
@@ -145,17 +166,17 @@ const AssetsPage = () => {
   const getDataSource = (connectorId) => {
     if (!connectorId) return 'Unknown';
     
-    // Parse connector_id format: azure_blob_{connection_name}
+    
     if (connectorId.startsWith('azure_blob_')) {
       return 'Azure Blob Storage';
     }
     
-    // Handle other connector types if needed
+    
     if (connectorId.startsWith('azure_')) {
       return 'Azure Storage';
     }
     
-    // Fallback to connector_id if it doesn't match known patterns
+    
     return connectorId;
   };
 
@@ -170,7 +191,7 @@ const AssetsPage = () => {
   };
 
   const handleApproveAsset = async (assetId) => {
-    // Optimistic update - update UI immediately
+    
     const asset = allAssets.find(a => a.id === assetId);
     if (asset) {
       const updatedAsset = {
@@ -200,7 +221,7 @@ const AssetsPage = () => {
       
       if (response.ok) {
         const result = await response.json();
-        // Update with server response - merge the updated asset data
+        
         const updatedAssetFromServer = {
           ...asset,
           ...result,
@@ -216,11 +237,11 @@ const AssetsPage = () => {
           console.log('Server response - Updated asset:', assetId, updatedAssetFromServer.operational_metadata);
         }
         
-        // Update both allAssets and assets state
+        
         const updatedAllAssets = allAssets.map(a => a.id === assetId ? updatedAssetFromServer : a);
         setAllAssets(updatedAllAssets);
         
-        // Re-filter and update displayed assets
+        
         let filtered = updatedAllAssets;
         if (searchTerm) {
           filtered = filtered.filter(a => 
@@ -245,13 +266,13 @@ const AssetsPage = () => {
         const end = start + pageSize;
         setAssets(filtered.slice(start, end));
       } else {
-        // Revert on error
+        
         await fetchAssets();
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to approve asset');
       }
     } catch (error) {
-      // Revert on error
+      
       await fetchAssets();
       if (import.meta.env.DEV) {
         console.error('Error approving asset:', error);
@@ -275,7 +296,7 @@ const AssetsPage = () => {
     
     setRejectDialogOpen(false);
     
-    // Optimistic update
+    
     const asset = allAssets.find(a => a.id === assetToReject);
     if (asset) {
       const updatedAsset = {
@@ -322,23 +343,26 @@ const AssetsPage = () => {
   };
 
   const handlePublishAsset = async (assetId) => {
-    // Optimistic update
     const asset = allAssets.find(a => a.id === assetId);
-    if (asset) {
-      const updatedAsset = {
-        ...asset,
-        operational_metadata: {
-          ...asset.operational_metadata,
-          publish_status: 'published',
-          published_at: new Date().toISOString()
-        }
-      };
-      setAllAssets(prev => prev.map(a => a.id === assetId ? updatedAsset : a));
-      setAssets(prev => prev.map(a => a.id === assetId ? updatedAsset : a));
+    if (!asset) {
+      alert('Asset not found');
+      return;
     }
+
+    const updatedAsset = {
+      ...asset,
+      operational_metadata: {
+        ...asset.operational_metadata,
+        publish_status: 'published',
+        published_at: new Date().toISOString()
+      }
+    };
+    setAllAssets(prev => prev.map(a => a.id === assetId ? updatedAsset : a));
+    setAssets(prev => prev.map(a => a.id === assetId ? updatedAsset : a));
     
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      
       const response = await fetch(`${API_BASE_URL}/api/assets/${assetId}/publish`, {
         method: 'POST',
         headers: {
@@ -349,7 +373,39 @@ const AssetsPage = () => {
       
       if (response.ok) {
         const result = await response.json();
+        const discoveryId = result.discovery_id;
+        
+        if (!discoveryId) {
+          throw new Error('Discovery ID not returned from publish endpoint');
+        }
+        
+        const discoveryResponse = await fetch(`${API_BASE_URL}/api/discovery/${discoveryId}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (!discoveryResponse.ok) {
+          throw new Error('Failed to fetch discovery details');
+        }
+        
+        const discoveryData = await discoveryResponse.json();
+        
+        if (import.meta.env.DEV) {
+          console.log('Full discovery data fetched:', discoveryData);
+          console.log('Discovery data keys:', Object.keys(discoveryData));
+        }
+        
         await fetchAssets();
+        
+        navigate(`/app/dataOnboarding?id=${discoveryId}`, {
+          state: { 
+            discovery: discoveryData,
+            asset: updatedAsset,
+            discoveryId: discoveryId
+          }
+        });
       } else {
         await fetchAssets();
         const errorData = await response.json();
@@ -365,50 +421,42 @@ const AssetsPage = () => {
   };
 
   const handleViewAsset = async (assetId) => {
+    // OPTIMIZED: First check if asset is already in state (instant - no API call)
+    const cachedAsset = allAssets.find(a => a.id === assetId);
     
+    if (cachedAsset) {
+      // Asset already loaded - use it directly (instant!)
+      setSelectedAsset(cachedAsset);
+      setDetailsDialogOpen(true);
+      setOriginalClassification(cachedAsset.business_metadata?.classification || 'internal');
+      setOriginalSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+      setClassification(cachedAsset.business_metadata?.classification || 'internal');
+      setSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+      return; // Exit early - no API call needed!
+    }
+    
+    // Only fetch if asset not in state (rare case - asset not loaded yet)
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets`);
+      // OPTIMIZED: Fetch only the specific asset, not all assets
+      const response = await fetch(`${API_BASE_URL}/api/assets/${assetId}`);
       if (response.ok) {
-        const allAssetsData = await response.json();
-        const asset = allAssetsData.find(a => a.id === assetId);
-        if (asset) {
-          
-          setAllAssets(allAssetsData);
-          setSelectedAsset(asset);
-      setDetailsDialogOpen(true);
-          setOriginalClassification(asset.business_metadata?.classification || 'internal');
-          setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-          setClassification(asset.business_metadata?.classification || 'internal');
-          setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-        }
-      } else {
-        
-        const asset = allAssets.find(a => a.id === assetId);
-        if (asset) {
-          setSelectedAsset(asset);
-          setDetailsDialogOpen(true);
-          setOriginalClassification(asset.business_metadata?.classification || 'internal');
-          setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-          setClassification(asset.business_metadata?.classification || 'internal');
-          setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
-        }
-      }
-    } catch (error) {
-      
-      if (import.meta.env.DEV) {
-        console.error('Error fetching asset:', error);
-      }
-      
-      const asset = allAssets.find(a => a.id === assetId);
-      if (asset) {
+        const asset = await response.json();
         setSelectedAsset(asset);
         setDetailsDialogOpen(true);
         setOriginalClassification(asset.business_metadata?.classification || 'internal');
         setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
         setClassification(asset.business_metadata?.classification || 'internal');
         setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+      } else {
+        const errorData = await response.json();
+        alert(`Failed to load asset: ${errorData.error || 'Asset not found'}`);
       }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error('Error fetching asset:', error);
+      }
+      alert('Failed to load asset details. Please try again.');
     }
   };
 
@@ -499,11 +547,6 @@ const AssetsPage = () => {
     setCurrentPage(0);
   };
 
-  const handleDiscoveryIdSearchChange = (event) => {
-    setDiscoveryIdSearch(event.target.value);
-    setCurrentPage(0);
-  };
-
   const handleViewDiscoveryDetails = async (discoveryId) => {
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -550,7 +593,7 @@ const AssetsPage = () => {
                 setLoading(true);
                 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                 
-                // First, get all connections
+                
                 const connectionsResponse = await fetch(`${API_BASE_URL}/api/connections`);
                 if (!connectionsResponse.ok) {
                   throw new Error('Failed to fetch connections');
@@ -560,12 +603,12 @@ const AssetsPage = () => {
                 const azureConnections = connections.filter(conn => conn.connector_type === 'azure_blob');
                 
                 if (azureConnections.length === 0) {
-                  // No connections, just refresh assets
+                  
                   await fetchAssets();
                   return;
                 }
                 
-                // Discover assets from all Azure connections synchronously (immediate results)
+                
                 const discoveryPromises = azureConnections.map(async (connection) => {
                   try {
                     const discoverResponse = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover`, {
@@ -574,7 +617,7 @@ const AssetsPage = () => {
                         'Content-Type': 'application/json',
                       },
                       body: JSON.stringify({
-                        containers: [], // Auto-discover all containers
+                        containers: [], 
                         folder_path: '',
                       }),
                     });
@@ -593,10 +636,10 @@ const AssetsPage = () => {
                   }
                 });
                 
-                // Wait for all discoveries to complete
+                
                 await Promise.all(discoveryPromises);
                 
-                // Also trigger Airflow DAG in background for scheduled runs
+                
                 try {
                   await fetch(`${API_BASE_URL}/api/discovery/trigger`, {
                     method: 'POST',
@@ -606,15 +649,51 @@ const AssetsPage = () => {
                     body: JSON.stringify({})
                   });
                 } catch (error) {
-                  // Ignore Airflow trigger errors - synchronous discovery already completed
+                  
                   console.warn('Airflow DAG trigger failed (non-critical):', error);
                 }
                 
-                // Finally, refresh assets to show newly discovered files
-                await fetchAssets();
+                
+                // Force refresh - reset page and fetch with cache busting
+                setCurrentPage(0);
+                // Force a fresh fetch by adding timestamp to URL
+                const timestamp = new Date().getTime();
+                const url = `${API_BASE_URL}/api/assets?page=1&per_page=${pageSize}&_t=${timestamp}`;
+                
+                const refreshResponse = await fetch(url);
+                if (refreshResponse.ok) {
+                  const refreshData = await refreshResponse.json();
+                  if (refreshData.assets && refreshData.pagination) {
+                    setAllAssets(refreshData.assets);
+                    setTotalAssets(refreshData.pagination.total);
+                    setTotalPages(refreshData.pagination.total_pages);
+                    
+                    // Apply filters
+                    let filtered = refreshData.assets;
+                    if (searchTerm) {
+                      filtered = filtered.filter(asset => 
+                        asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                        (asset.catalog && asset.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
+                      );
+                    }
+                    if (typeFilter) {
+                      filtered = filtered.filter(asset => asset.type === typeFilter);
+                    }
+                    if (catalogFilter) {
+                      filtered = filtered.filter(asset => asset.catalog === catalogFilter);
+                    }
+                    if (approvalStatusFilter) {
+                      filtered = filtered.filter(asset => {
+                        const status = asset.operational_metadata?.approval_status || 'pending_review';
+                        return status === approvalStatusFilter;
+                      });
+                    }
+                    setAssets(filtered);
+                  }
+                }
               } catch (error) {
                 console.error('Error refreshing:', error);
-                // Still try to fetch assets even if discovery fails
+                
                 await fetchAssets();
               } finally {
                 setLoading(false);
@@ -636,22 +715,6 @@ const AssetsPage = () => {
                   placeholder="Search assets..."
                   value={searchTerm}
                   onChange={handleSearchChange}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <Search />
-                      </InputAdornment>
-                    ),
-                  }}
-                />
-            </Grid>
-            <Grid item xs={12} md={2}>
-                <TextField
-                  fullWidth
-                  placeholder="Search by Discovery ID..."
-                  value={discoveryIdSearch}
-                  onChange={handleDiscoveryIdSearchChange}
-                  type="number"
                   InputProps={{
                     startAdornment: (
                       <InputAdornment position="start">
@@ -743,7 +806,6 @@ const AssetsPage = () => {
                 startIcon={<FilterList />}
                 onClick={() => {
                   setSearchTerm('');
-                  setDiscoveryIdSearch('');
                   setTypeFilter('');
                   setCatalogFilter('');
                   setApprovalStatusFilter('');
@@ -812,9 +874,16 @@ const AssetsPage = () => {
                       />
                     </TableCell>
                     <TableCell>
-                      <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'Roboto' }}>
-                        {new Date(asset.discovered_at).toLocaleDateString()}
-                      </Typography>
+                      <Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'Roboto' }}>
+                          {new Date(asset.discovered_at).toLocaleDateString()}
+                        </Typography>
+                        {asset.discovery_id && (
+                          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'Roboto', fontSize: '0.75rem', opacity: 0.7 }}>
+                            ID: {asset.discovery_id}
+                          </Typography>
+                        )}
+                      </Box>
                     </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
@@ -980,18 +1049,18 @@ const AssetsPage = () => {
                     const safeAssetId = technicalMetadata.asset_id || selectedAsset?.id || 'N/A';
                     const safeLocation = technicalMetadata.location || 'N/A';
                     
-                    // Get Size - ensure it's properly fetched from Azure
+                    
                     const safeSizeBytes = technicalMetadata.size_bytes || technicalMetadata.size || 0;
                     
-                    // Get Format - try multiple sources
+                    
                     let safeFormat = technicalMetadata.format;
                     if (!safeFormat || safeFormat === 'unknown') {
-                        // Try to get from file extension
+                        
                         const fileExt = technicalMetadata.file_extension;
                         if (fileExt && fileExt !== 'N/A' && fileExt !== '') {
                             safeFormat = fileExt.replace('.', '').toUpperCase();
                         } else {
-                            // Try content type
+                            
                             const contentType = technicalMetadata.content_type || '';
                             if (contentType.includes('/')) {
                                 safeFormat = contentType.split('/')[1].toUpperCase();
@@ -1007,25 +1076,25 @@ const AssetsPage = () => {
                     const safeLastModified = technicalMetadata.last_modified || safeCreatedAt;
                     const safeFileExtension = technicalMetadata.file_extension || 'N/A';
                     
-                    // Azure-specific properties
+                    
                     const blobType = technicalMetadata.blob_type || 'Block blob';
                     const accessTier = technicalMetadata.access_tier || 'N/A';
                     const etag = technicalMetadata.etag || 'N/A';
                     const contentType = technicalMetadata.content_type || 'N/A';
                     
-                    // Get meaningful storage type (not file format, since Format field shows that)
-                    let storageType = 'Data File'; // Default fallback
                     
-                    // Try to get from storage_location (from discovery, available in asset API response)
+                    let storageType = 'Data File'; 
+                    
+                    
                     const storageLocation = selectedAsset?.storage_location || technicalMetadata.storage_location || {};
                     const storageLocationType = storageLocation.type;
                     
-                    // Or try to infer from connector_id
+                    
                     const connectorId = selectedAsset?.connector_id || '';
                     
-                    // Determine storage type
+                    
                     if (storageLocationType) {
-                        // Map storage location types to user-friendly names
+                        
                         const typeMap = {
                             'azure_blob': 'Azure Blob Storage',
                             'azure_file_share': 'Azure File Share',
@@ -1035,7 +1104,7 @@ const AssetsPage = () => {
                         };
                         storageType = typeMap[storageLocationType] || storageLocationType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
                     } else if (connectorId) {
-                        // Parse connector_id format: azure_blob_{name}, azure_file_share_{name}, etc.
+                        
                         if (connectorId.startsWith('azure_blob')) {
                             storageType = 'Azure Blob Storage';
                         } else if (connectorId.startsWith('azure_file_share')) {
@@ -1062,7 +1131,7 @@ const AssetsPage = () => {
                           </Card>
                         </Grid>
                         
-                        {/* Azure Properties - Required Fields */}
+                        {}
                         <Grid item xs={6}>
                           <Card variant="outlined">
                             <CardContent>
@@ -1160,7 +1229,7 @@ const AssetsPage = () => {
                           </Card>
                         </Grid>
                         
-                        {/* Additional Properties */}
+                        {}
                         <Grid item xs={6}>
                           <Card variant="outlined">
                             <CardContent>
@@ -1412,26 +1481,9 @@ const AssetsPage = () => {
                                 Table Tags
                               </Typography>
                               <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                                {selectedAsset?.business_metadata?.tags && selectedAsset.business_metadata.tags.length > 0 ? (
-                                  selectedAsset.business_metadata.tags.map((tag, index) => (
-                                    <Chip 
-                                      key={index} 
-                                      label={tag} 
-                                      size="small" 
-                                      variant="outlined"
-                                      sx={{ 
-                                        backgroundColor: '#e3f2fd', 
-                                        color: '#1565c0', 
-                                        border: '1px solid #90caf9',
-                                        fontWeight: 600
-                                      }}
-                                    />
-                                  ))
-                                ) : (
-                                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                                    No table tags
-                                  </Typography>
-                                )}
+                                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                  No table tags
+                                </Typography>
                               </Box>
                             </CardContent>
                           </Card>
@@ -1443,48 +1495,9 @@ const AssetsPage = () => {
                                 Column Tags
                               </Typography>
                               <Box sx={{ mt: 1 }}>
-                                {selectedAsset?.columns && selectedAsset.columns.length > 0 ? (() => {
-                                  
-                                  const allColumnTags = [];
-                                  selectedAsset.columns.forEach(column => {
-                                    const columnTags = column.tags || [];
-                                    columnTags.forEach(tag => {
-                                      if (!allColumnTags.includes(tag)) {
-                                        allColumnTags.push(tag);
-                                      }
-                                    });
-                                  });
-                                  
-                                  if (allColumnTags.length > 0) {
-                                      return (
-                                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                                        {allColumnTags.map((tag, tagIndex) => (
-                                              <Chip 
-                                                key={tagIndex} 
-                                                label={tag} 
-                                                size="small" 
-                                                variant="outlined"
-                                                sx={{ 
-                                                  backgroundColor: '#f3e5f5', 
-                                                  color: '#7b1fa2', 
-                                                  border: '1px solid #ce93d8',
-                                                  fontWeight: 600
-                                                }}
-                                              />
-                                            ))}
-                                        </Box>
-                                      );
-                                    }
-                                  return (
-                                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                                      No column tags
-                                    </Typography>
-                                  );
-                                })() : (
-                                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                                    No column tags
-                                  </Typography>
-                                )}
+                                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                  No column tags
+                                </Typography>
                               </Box>
                             </CardContent>
                           </Card>
@@ -1609,7 +1622,7 @@ const AssetsPage = () => {
         )}
       </Dialog>
 
-      {/* Rejection Reason Dialog */}
+      {}
       <Dialog open={rejectDialogOpen} onClose={() => setRejectDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Reject Asset</DialogTitle>
         <DialogContent>
@@ -1648,7 +1661,7 @@ const AssetsPage = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Discovery Details Dialog */}
+      {}
       <Dialog open={discoveryDetailsOpen} onClose={() => setDiscoveryDetailsOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Discovery Details</DialogTitle>
         <DialogContent>

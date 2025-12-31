@@ -3,7 +3,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 import sys
 import os
-# Handle both relative and absolute imports
+
 try:
     from .database import Base
 except ImportError:
@@ -24,7 +24,7 @@ class Asset(Base):
     business_metadata = Column(JSON)
     columns = Column(JSON)
     
-    # Relationships
+
     source_lineage = relationship("LineageRelationship", foreign_keys="LineageRelationship.source_asset_id", back_populates="source_asset")
     target_lineage = relationship("LineageRelationship", foreign_keys="LineageRelationship.target_asset_id", back_populates="target_asset")
 
@@ -40,39 +40,38 @@ class Connection(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 class LineageRelationship(Base):
-    """Real data lineage relationships extracted from SQL queries, ETL jobs, etc."""
     __tablename__ = "lineage_relationships"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     source_asset_id = Column(String(255), ForeignKey('assets.id', ondelete='CASCADE'), nullable=False)
     target_asset_id = Column(String(255), ForeignKey('assets.id', ondelete='CASCADE'), nullable=False)
-    relationship_type = Column(String(50), default='transformation')  # transformation, copy, view, etc.
-    source_type = Column(String(50), nullable=False)  # table, view, file, etc.
+    relationship_type = Column(String(50), default='transformation')
+    source_type = Column(String(50), nullable=False)
     target_type = Column(String(50), nullable=False)
     
-    # Column-level lineage (JSON array)
-    column_lineage = Column(JSON)  # [{"source_column": "col1", "target_column": "col1", "transformation": "pass_through"}]
+
+    column_lineage = Column(JSON)
     
-    # Transformation details
-    transformation_type = Column(String(50))  # pass_through, aggregate, join, filter, etc.
+
+    transformation_type = Column(String(50))
     transformation_description = Column(Text)
-    sql_query = Column(Text)  # Original SQL query if available
+    sql_query = Column(Text)
     
-    # Metadata
-    source_system = Column(String(50))  # airflow, dbt, databricks, manual, etc.
-    source_job_id = Column(String(255))  # ETL job ID or task ID
+
+    source_system = Column(String(50))
+    source_job_id = Column(String(255))
     source_job_name = Column(String(255))
     
-    # Confidence and quality
-    confidence_score = Column(DECIMAL(3, 2), default=1.0)  # 0.0 to 1.0
-    extraction_method = Column(String(50))  # sql_parsing, manual, api, inferred
+
+    confidence_score = Column(DECIMAL(3, 2), default=1.0)
+    extraction_method = Column(String(50))
     
-    # Timestamps
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     discovered_at = Column(DateTime)
     
-    # Relationships
+
     source_asset = relationship("Asset", foreign_keys=[source_asset_id], back_populates="source_lineage")
     target_asset = relationship("Asset", foreign_keys=[target_asset_id], back_populates="target_lineage")
     
@@ -81,44 +80,41 @@ class LineageRelationship(Base):
     )
 
 class LineageHistory(Base):
-    """Tracks changes to lineage over time (temporal lineage)"""
     __tablename__ = "lineage_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     relationship_id = Column(Integer, ForeignKey('lineage_relationships.id', ondelete='CASCADE'), nullable=False)
-    action = Column(String(50), nullable=False)  # created, updated, deleted
-    old_data = Column(JSON)  # Snapshot of old relationship data
-    new_data = Column(JSON)  # Snapshot of new relationship data
-    changed_by = Column(String(255))  # User who made the change
+    action = Column(String(50), nullable=False)
+    old_data = Column(JSON)
+    new_data = Column(JSON)
+    changed_by = Column(String(255))
     changed_at = Column(DateTime, server_default=func.now())
     
     relationship = relationship("LineageRelationship")
 
 class SQLQuery(Base):
-    """Stores SQL queries for parsing and lineage extraction"""
     __tablename__ = "sql_queries"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     query_text = Column(Text, nullable=False)
-    query_type = Column(String(50))  # SELECT, INSERT, UPDATE, CREATE TABLE, etc.
-    source_system = Column(String(50))  # airflow, dbt, databricks, etc.
+    query_type = Column(String(50))
+    source_system = Column(String(50))
     job_id = Column(String(255))
     job_name = Column(String(255))
     asset_id = Column(String(255), ForeignKey('assets.id', ondelete='SET NULL'))
     
-    # Parsed lineage (cached)
+
     parsed_lineage = Column(JSON)
-    parse_status = Column(String(50), default='pending')  # pending, parsed, failed
+    parse_status = Column(String(50), default='pending')
     parse_error = Column(Text)
     
-    # Metadata
+
     created_at = Column(DateTime, server_default=func.now())
     executed_at = Column(DateTime)
     
     asset = relationship("Asset")
 
 class DataDiscovery(Base):
-    """Data Discovery table for tracking discovered assets with approval workflow"""
     __tablename__ = "data_discovery"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
@@ -168,6 +164,6 @@ class DataDiscovery(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     
-    # Relationship
+
     asset = relationship("Asset", foreign_keys=[asset_id])
 

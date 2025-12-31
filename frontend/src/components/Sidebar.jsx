@@ -50,7 +50,7 @@ const Sidebar = ({ open, onClose }) => {
         <List sx={{ px: 2 }}>
           {menuItems.map((item) => {
             const itemPath = item.path === '' ? '/' : `/${item.path}`;
-            // React Router with basename returns pathname relative to basename
+            
             const normalizedPath = location.pathname.replace(/^\/airflow-fe/, '') || '/';
             const isActive = normalizedPath === itemPath;
             return (
