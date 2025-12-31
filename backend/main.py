@@ -1917,6 +1917,36 @@ def discover_assets(connection_id):
                 container_assets_by_folder = {}
                 container_skipped_count = 0
                 
+                # OPTIMIZATION: Pre-load all existing assets for this connector into memory (one query instead of N queries)
+                existing_assets_map = {}
+                connector_id = f"azure_blob_{connection.name}"
+                if AZURE_AVAILABLE and not skip_deduplication:
+                    try:
+                        preload_db = SessionLocal()
+                        try:
+                            existing_assets = preload_db.query(Asset).filter(
+                                Asset.connector_id == connector_id
+                            ).all()
+                            
+                            from utils.asset_deduplication import normalize_path
+                            for asset in existing_assets:
+                                tech_meta = asset.technical_metadata or {}
+                                stored_location = tech_meta.get('location') or tech_meta.get('storage_path') or ""
+                                normalized_path_key = normalize_path(stored_location)
+                                if normalized_path_key:
+                                    existing_assets_map[normalized_path_key] = asset
+                            
+                            logger.info('FN:discover_assets connector_id:{} container_name:{} message:Pre-loaded {} existing assets into memory for fast lookup'.format(
+                                connector_id, container_name, len(existing_assets_map)
+                            ))
+                        finally:
+                            preload_db.close()
+                    except Exception as e:
+                        logger.warning('FN:discover_assets connector_id:{} container_name:{} message:Failed to pre-load existing assets, will use per-file queries error:{}'.format(
+                            connector_id, container_name, str(e)
+                        ))
+                        existing_assets_map = {}
+                
                 try:
                     logger.info('FN:discover_assets container_name:{} folder_path:{} message:Listing files'.format(container_name, folder_path))
                     
@@ -2023,25 +2053,30 @@ def discover_assets(connection_id):
                                     "metadata": blob_info.get("metadata", {})
                                 }
                                 
+                                # OPTIMIZED: Use pre-loaded existing_assets_map for fast in-memory lookup instead of DB query per file
                                 # Skip deduplication for test discoveries (from ConnectorsPage)
                                 # Only do deduplication for refresh operations (from AssetsPage)
                                 if AZURE_AVAILABLE and not skip_deduplication:
                                     try:
-                                        existing_assets_count = thread_db.query(Asset).filter(
-                                            Asset.connector_id == connector_id
-                                        ).count()
-                                        
-
-                                        if existing_assets_count > 0:
-                                            existing_asset = check_asset_exists(thread_db, connector_id, blob_path)
+                                        # Fast in-memory lookup using pre-loaded map
+                                        from utils.asset_deduplication import normalize_path
+                                        normalized_blob_path = normalize_path(blob_path)
+                                        if normalized_blob_path and normalized_blob_path in existing_assets_map:
+                                            existing_asset = existing_assets_map[normalized_blob_path]
+                                            # Refresh the asset object from DB to ensure we have latest data
+                                            existing_asset = thread_db.query(Asset).filter(Asset.id == existing_asset.id).first()
                                             if existing_asset:
-                                                logger.debug('FN:discover_assets blob_path:{} existing_asset_id:{} message:Found existing asset for deduplication (refresh)'.format(blob_path, existing_asset.id))
+                                                logger.debug('FN:discover_assets blob_path:{} existing_asset_id:{} message:Found existing asset via fast lookup (refresh)'.format(blob_path, existing_asset.id))
                                         else:
-                                            logger.debug('FN:discover_assets connector_id:{} message:Initial discovery - skipping deduplication'.format(connector_id))
+                                            # Not in pre-loaded map, so it's definitely new
+                                            existing_asset = None
                                     except Exception as e:
-                                        logger.error('FN:discover_assets blob_path:{} error:check_asset_exists failed error:{}'.format(blob_path, str(e)))
-
-                                        existing_asset = None
+                                        logger.error('FN:discover_assets blob_path:{} error:Fast lookup failed, falling back to DB query error:{}'.format(blob_path, str(e)))
+                                        # Fallback to original DB query if in-memory lookup fails
+                                        try:
+                                            existing_asset = check_asset_exists(thread_db, connector_id, blob_path)
+                                        except Exception:
+                                            existing_asset = None
                                 elif skip_deduplication:
                                     logger.debug('FN:discover_assets blob_path:{} message:Skipping deduplication (test discovery)'.format(blob_path))
                                 
