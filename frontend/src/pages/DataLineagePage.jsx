@@ -1360,22 +1360,78 @@ const DataLineagePage = () => {
                                 />
                                 </TableCell>
                               <TableCell>
-                                {isPII ? (
-                                  <Chip 
-                                    label="PII" 
-                                    size="small" 
-                                    color="error"
-                                    sx={{ fontWeight: 600 }}
-                                  />
-                                ) : (
-                                  <Chip 
-                                    label="Safe" 
-                                    size="small" 
-                                    color="success"
-                                    variant="outlined"
-                                    sx={{ fontWeight: 500 }}
-                                  />
-                                )}
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
+                                    <Chip 
+                                      label="PII" 
+                                      size="small" 
+                                      color="error"
+                                      sx={{ fontWeight: 600, cursor: 'pointer' }}
+                                      onClick={async () => {
+                                        try {
+                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                          const response = await fetch(
+                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                            {
+                                              method: 'PUT',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                pii_detected: false,
+                                                pii_types: null
+                                              })
+                                            }
+                                          );
+                                          if (response.ok) {
+                                            const updatedAsset = { ...selectedAssetDetails };
+                                            updatedAsset.columns = updatedAsset.columns.map(c => 
+                                              c.name === col.name 
+                                                ? { ...c, pii_detected: false, pii_types: null }
+                                                : c
+                                            );
+                                            setSelectedAssetDetails(updatedAsset);
+                                          }
+                                        } catch (err) {
+                                          console.error('Failed to update PII status:', err);
+                                        }
+                                      }}
+                                    />
+                                  ) : (
+                                    <Chip 
+                                      label="Safe" 
+                                      size="small" 
+                                      color="success"
+                                      variant="outlined"
+                                      sx={{ fontWeight: 500, cursor: 'pointer' }}
+                                      onClick={async () => {
+                                        try {
+                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                          const response = await fetch(
+                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                            {
+                                              method: 'PUT',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                pii_detected: true,
+                                                pii_types: col.pii_types || ['PII']
+                                              })
+                                            }
+                                          );
+                                          if (response.ok) {
+                                            const updatedAsset = { ...selectedAssetDetails };
+                                            updatedAsset.columns = updatedAsset.columns.map(c => 
+                                              c.name === col.name 
+                                                ? { ...c, pii_detected: true, pii_types: c.pii_types || ['PII'] }
+                                                : c
+                                            );
+                                            setSelectedAssetDetails(updatedAsset);
+                                          }
+                                        } catch (err) {
+                                          console.error('Failed to update PII status:', err);
+                                        }
+                                      }}
+                                    />
+                                  )}
+                                </Box>
                               </TableCell>
                               <TableCell sx={{ color: '#666' }}>
                                 {col.description || '-'}
@@ -2154,7 +2210,7 @@ const DataLineagePage = () => {
                                     />
                                 </TableCell>
                                   <TableCell>
-                                    {isPII ? (
+                                    {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
                                       <Chip 
                                         label="PII" 
                                         size="small" 

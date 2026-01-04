@@ -37,12 +37,13 @@ logger = logging.getLogger(__name__)
 
 try:
     from .azure_dlp_client import detect_pii_in_column
-    AZURE_DLP_AVAILABLE = True
+    # Azure DLP is disabled - using regex-based detection only
+    AZURE_DLP_AVAILABLE = False
 except ImportError:
     logger.warning('FN:metadata_extractor_import AZURE_DLP_AVAILABLE:{}'.format(False))
     AZURE_DLP_AVAILABLE = False
     
-    def detect_pii_in_column(column_name: str) -> Dict:
+    def detect_pii_in_column(column_name: str, sample_data=None) -> Dict:
         return {"pii_detected": False, "pii_types": []}
 
 
@@ -52,36 +53,47 @@ def generate_file_hash(file_content: bytes) -> str:
     return hash_obj.hexdigest(16)
 
 
-def extract_parquet_schema(file_content: bytes) -> Dict:
-
-
-
+def extract_parquet_schema(file_content: bytes, include_pii_detection: bool = False, sample_data: Optional[Dict] = None) -> Dict:
+    """
+    Extract schema from parquet file content.
+    
+    Args:
+        file_content: Parquet file bytes (can be just footer for schema, or full file for PII)
+        include_pii_detection: If True, attempts to extract sample data for PII detection
+        sample_data: Optional pre-extracted sample data (for when footer-only is used)
+    
+    Returns:
+        Dictionary with columns, types, and optionally PII detection
+    """
     try:
         parquet_file = pq.ParquetFile(io.BytesIO(file_content))
         schema = parquet_file.schema_arrow
         
-
-        sample_data = None
-        try:
-            table = parquet_file.read_row_group(0) if parquet_file.num_row_groups > 0 else None
-            if table is not None:
-
-                sample_table = table.slice(0, min(10, len(table)))
-                sample_data = sample_table.to_pandas().to_dict('list')
-        except Exception as e:
-            logger.debug('FN:extract_parquet_schema message:Could not read sample data error:{}'.format(str(e)))
-            sample_data = None
+        # Try to get sample data for PII detection if requested
+        if include_pii_detection and sample_data is None:
+            try:
+                table = parquet_file.read_row_group(0) if parquet_file.num_row_groups > 0 else None
+                if table is not None:
+                    sample_table = table.slice(0, min(10, len(table)))
+                    sample_data = sample_table.to_pandas().to_dict('list')
+            except Exception as e:
+                logger.debug('FN:extract_parquet_schema message:Could not read sample data error:{}'.format(str(e)))
+                sample_data = None
         
         columns = []
         for i in range(len(schema)):
             field = schema.field(i)
             
-
+            # Get column samples for PII detection
             column_samples = None
-            if sample_data and field.name in sample_data:
-                column_samples = [str(val) for val in sample_data[field.name][:10] if val is not None]
+            if include_pii_detection:
+                if sample_data and field.name in sample_data:
+                    column_samples = [str(val) for val in sample_data[field.name][:10] if val is not None]
+                else:
+                    # Fallback to column name only (no data samples available)
+                    column_samples = None
             
-
+            # PII detection: Use column name + samples if available, or column name only
             pii_result = detect_pii_in_column(field.name, column_samples)
             
             column_data = {
@@ -90,12 +102,17 @@ def extract_parquet_schema(file_content: bytes) -> Dict:
                 "nullable": field.nullable
             }
             
-
-            if pii_result.get("pii_detected"):
-                column_data["pii_detected"] = True
-                column_data["pii_types"] = pii_result.get("pii_types", [])
+            # Add PII detection results
+            if include_pii_detection:
+                if pii_result.get("pii_detected"):
+                    column_data["pii_detected"] = True
+                    column_data["pii_types"] = pii_result.get("pii_types", [])
+                else:
+                    column_data["pii_detected"] = False
+                    column_data["pii_types"] = None
             else:
-                column_data["pii_detected"] = False
+                # PII detection skipped - mark as None
+                column_data["pii_detected"] = None
                 column_data["pii_types"] = None
             
             columns.append(column_data)
@@ -287,7 +304,8 @@ def extract_json_schema(file_content: bytes) -> Dict:
                 }
                 
 
-                if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                # Always use PII detection result (regex-based, Azure DLP disabled)
+                if pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
                 else:
@@ -316,7 +334,7 @@ def extract_json_schema(file_content: bytes) -> Dict:
                     }
                     
 
-                    if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                    if pii_result.get("pii_detected"):
                         column_data["pii_detected"] = True
                         column_data["pii_types"] = pii_result.get("pii_types", [])
                     else:
@@ -390,7 +408,8 @@ def extract_avro_schema(file_content: bytes) -> Dict:
                     "nullable": True
                 }
                 
-                if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                # Always use PII detection result (regex-based, Azure DLP disabled)
+                if pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
                 else:
@@ -455,7 +474,7 @@ def extract_excel_schema(file_content: bytes) -> Dict:
                 "nullable": True
             }
             
-            if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+            if pii_result.get("pii_detected"):
                 column_data["pii_detected"] = True
                 column_data["pii_types"] = pii_result.get("pii_types", [])
             else:
@@ -502,7 +521,8 @@ def extract_xml_schema(file_content: bytes) -> Dict:
                     "nullable": True
                 }
                 
-                if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                # Always use PII detection result (regex-based, Azure DLP disabled)
+                if pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
                 else:
@@ -547,7 +567,7 @@ def extract_orc_schema(file_content: bytes) -> Dict:
                 "nullable": field.nullable
             }
             
-            if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+            if pii_result.get("pii_detected"):
                 column_data["pii_detected"] = True
                 column_data["pii_types"] = pii_result.get("pii_types", [])
             else:
@@ -699,7 +719,9 @@ def extract_file_metadata(blob_info: Dict, file_content: Optional[bytes] = None)
 
     if file_format == "parquet" and file_content:
         try:
-            schema_json = extract_parquet_schema(file_content)
+            # Extract schema with PII detection (regex-based, no Azure DLP)
+            # Uses column names for PII detection (no data samples needed)
+            schema_json = extract_parquet_schema(file_content, include_pii_detection=True, sample_data=None)
             schema_hash = generate_schema_hash(schema_json)
         except Exception as e:
             logger.warning('FN:extract_file_metadata file_name:{} file_format:{} error:{}'.format(file_name, file_format, str(e)))

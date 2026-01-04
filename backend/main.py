@@ -48,6 +48,26 @@ from functools import wraps
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 import sys
+
+def normalize_column_schema(column):
+    """Ensure all expected fields are present in column schema, including masking logic"""
+    if not isinstance(column, dict):
+        return column
+    
+    normalized = dict(column)  # Copy existing fields
+    # Always ensure masking logic fields are present in the response schema
+    # Set to None if not present or if empty string
+    if 'masking_logic_analytical' not in normalized or normalized.get('masking_logic_analytical') == '':
+        normalized['masking_logic_analytical'] = None
+    if 'masking_logic_operational' not in normalized or normalized.get('masking_logic_operational') == '':
+        normalized['masking_logic_operational'] = None
+    return normalized
+
+def normalize_columns(columns):
+    """Normalize a list of columns to ensure consistent schema with masking logic fields"""
+    if not columns:
+        return []
+    return [normalize_column_schema(col) for col in columns]
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -409,7 +429,50 @@ def get_assets():
                 if not asset:
                     return jsonify({"error": "Asset not found for this discovery_id"}), 404
                 
-                return jsonify([{
+                # OPTIMIZED: Only calculate quality score if not cached
+                operational_metadata = asset.operational_metadata or {}
+                columns_list = asset.columns or []
+                columns_hash = str(hash(str(columns_list))) if columns_list else None
+                
+                cached_score = operational_metadata.get('data_quality_score')
+                cached_columns_hash = operational_metadata.get('quality_columns_hash')
+                needs_recalculation = (
+                    cached_score is None or 
+                    cached_columns_hash != columns_hash or
+                    not operational_metadata.get('quality_metrics')
+                )
+                
+                if needs_recalculation and columns_list and len(columns_list) > 0:
+                    try:
+                        asset_dict = {
+                            'id': asset.id,
+                            'name': asset.name,
+                            'columns': columns_list,
+                            'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
+                            'technical_metadata': asset.technical_metadata or {},
+                            'operational_metadata': operational_metadata
+                        }
+                        quality_result = calculate_asset_quality_score(asset_dict)
+                        calculated_score = quality_result.get('quality_score', 0.0)
+                        quality_score = int(round(calculated_score * 100))
+                        if quality_score == 0:
+                            quality_score = 50
+                        
+                        operational_metadata['data_quality_score'] = quality_score
+                        operational_metadata['quality_metrics'] = quality_result.get('quality_metrics', {})
+                        operational_metadata['quality_issues'] = quality_result.get('quality_issues', [])
+                        operational_metadata['quality_columns_hash'] = columns_hash
+                    except Exception as e:
+                        logger.warning('FN:get_assets discovery_id:{} asset_id:{} error:{}'.format(discovery.id, asset.id, str(e)))
+                        quality_score = 75 if columns_list else 0
+                        operational_metadata['data_quality_score'] = quality_score
+                elif cached_score is not None:
+                    quality_score = cached_score
+                else:
+                    quality_score = 0
+                    operational_metadata['data_quality_score'] = quality_score
+                
+                asset_data = {
                     "id": asset.id,
                     "name": asset.name,
                     "type": asset.type,
@@ -417,13 +480,28 @@ def get_assets():
                     "connector_id": asset.connector_id,
                     "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
                     "technical_metadata": asset.technical_metadata,
-                    "operational_metadata": asset.operational_metadata,
+                    "operational_metadata": operational_metadata,
                     "business_metadata": asset.business_metadata,
-                    "columns": asset.columns,
+                    "columns": normalize_columns(asset.columns or []),
                     "discovery_id": discovery.id,
                     "discovery_status": discovery.status,
                     "discovery_approval_status": discovery.approval_status
-                }])
+                }
+                # Add data_source_type from discovery
+                if discovery.data_source_type:
+                    asset_data["data_source_type"] = discovery.data_source_type
+                elif asset.connector_id:
+                    # Derive from connector_id
+                    if asset.connector_id.startswith('azure_blob_'):
+                        asset_data["data_source_type"] = "azure_blob"
+                    elif asset.connector_id.startswith('adls_gen2_') or 'datalake' in asset.connector_id.lower():
+                        asset_data["data_source_type"] = "adls_gen2"
+                    else:
+                        parts = asset.connector_id.split('_')
+                        if parts:
+                            asset_data["data_source_type"] = parts[0]
+                
+                return jsonify([asset_data])
             else:
                 return jsonify({"error": "No asset linked to this discovery_id"}), 404
         
@@ -463,6 +541,67 @@ def get_assets():
             if asset.id in seen_asset_ids:
                 continue
             seen_asset_ids.add(asset.id)
+            
+            # OPTIMIZED: Only calculate quality score if not cached or if columns changed
+            operational_metadata = asset.operational_metadata or {}
+            columns_list = asset.columns or []
+            columns_hash = str(hash(str(columns_list))) if columns_list else None
+            
+            # Check if we need to recalculate (score missing or columns changed)
+            cached_score = operational_metadata.get('data_quality_score')
+            cached_columns_hash = operational_metadata.get('quality_columns_hash')
+            needs_recalculation = (
+                cached_score is None or 
+                cached_columns_hash != columns_hash or
+                not operational_metadata.get('quality_metrics')
+            )
+            
+            if needs_recalculation and columns_list and len(columns_list) > 0:
+                try:
+                    asset_dict = {
+                        'id': asset.id,
+                        'name': asset.name,
+                        'columns': columns_list,
+                        'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
+                        'technical_metadata': asset.technical_metadata or {},
+                        'operational_metadata': operational_metadata
+                    }
+                    quality_result = calculate_asset_quality_score(asset_dict)
+                    calculated_score = quality_result.get('quality_score', 0.0)
+                    quality_score = int(round(calculated_score * 100))  # Convert to percentage
+                    # Ensure minimum score of 50 if columns exist
+                    if quality_score == 0:
+                        quality_score = 50
+                    
+                    # Store score and metrics for tooltip
+                    operational_metadata['data_quality_score'] = quality_score
+                    operational_metadata['quality_metrics'] = quality_result.get('quality_metrics', {})
+                    operational_metadata['quality_issues'] = quality_result.get('quality_issues', [])
+                    operational_metadata['quality_columns_hash'] = columns_hash
+                    
+                    # Save to database if score was recalculated
+                    if needs_recalculation:
+                        asset.operational_metadata = operational_metadata
+                        flag_modified(asset, "operational_metadata")
+                        db.commit()
+                        db.refresh(asset)
+                    
+                    logger.debug('FN:get_assets asset_id:{} columns_count:{} calculated_score:{} quality_score:{}'.format(
+                        asset.id, len(columns_list), calculated_score, quality_score
+                    ))
+                except Exception as e:
+                    logger.warning('FN:get_assets asset_id:{} error_calculating_quality:{}'.format(asset.id, str(e)), exc_info=True)
+                    # Default to 75 if calculation fails but asset has columns
+                    quality_score = 75 if columns_list else 0
+                    operational_metadata['data_quality_score'] = quality_score
+            elif cached_score is not None:
+                # Use cached score
+                quality_score = cached_score
+            else:
+                # No columns - set to 0
+                quality_score = 0
+                operational_metadata['data_quality_score'] = quality_score
+            
             asset_data = {
             "id": asset.id,
             "name": asset.name,
@@ -471,14 +610,27 @@ def get_assets():
             "connector_id": asset.connector_id,
             "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
             "technical_metadata": asset.technical_metadata,
-            "operational_metadata": asset.operational_metadata,
+            "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata,
-            "columns": asset.columns
+            "columns": normalize_columns(asset.columns or [])
             }
             if discovery:
                 asset_data["discovery_id"] = discovery.id
                 asset_data["discovery_status"] = discovery.status
                 asset_data["discovery_approval_status"] = discovery.approval_status
+                asset_data["data_source_type"] = discovery.data_source_type
+            else:
+                # Derive data_source_type from connector_id if discovery not available
+                if asset.connector_id:
+                    if asset.connector_id.startswith('azure_blob_'):
+                        asset_data["data_source_type"] = "azure_blob"
+                    elif asset.connector_id.startswith('adls_gen2_') or 'datalake' in asset.connector_id.lower():
+                        asset_data["data_source_type"] = "adls_gen2"
+                    else:
+                        # Extract from connector_id format: "type_name"
+                        parts = asset.connector_id.split('_')
+                        if parts:
+                            asset_data["data_source_type"] = parts[0]
             result.append(asset_data)
         
         total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 0
@@ -1036,6 +1188,56 @@ def get_asset_by_id(asset_id):
             DataDiscovery.asset_id == asset_id
         ).order_by(DataDiscovery.id.desc()).first()
         
+        # OPTIMIZED: Only calculate quality score if not cached
+        operational_metadata = asset.operational_metadata or {}
+        columns_list = asset.columns or []
+        columns_hash = str(hash(str(columns_list))) if columns_list else None
+        
+        cached_score = operational_metadata.get('data_quality_score')
+        cached_columns_hash = operational_metadata.get('quality_columns_hash')
+        needs_recalculation = (
+            cached_score is None or 
+            cached_columns_hash != columns_hash or
+            not operational_metadata.get('quality_metrics')
+        )
+        
+        if needs_recalculation and columns_list and len(columns_list) > 0:
+            try:
+                asset_dict = {
+                    'id': asset.id,
+                    'name': asset.name,
+                    'columns': columns_list,
+                    'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
+                    'technical_metadata': asset.technical_metadata or {},
+                    'operational_metadata': operational_metadata
+                }
+                quality_result = calculate_asset_quality_score(asset_dict)
+                calculated_score = quality_result.get('quality_score', 0.0)
+                quality_score = int(round(calculated_score * 100))
+                if quality_score == 0:
+                    quality_score = 50
+                
+                operational_metadata['data_quality_score'] = quality_score
+                operational_metadata['quality_metrics'] = quality_result.get('quality_metrics', {})
+                operational_metadata['quality_issues'] = quality_result.get('quality_issues', [])
+                operational_metadata['quality_columns_hash'] = columns_hash
+                
+                # Save to database if score was recalculated
+                if needs_recalculation:
+                    asset.operational_metadata = operational_metadata
+                    flag_modified(asset, "operational_metadata")
+                    db.commit()
+                    db.refresh(asset)
+            except Exception as e:
+                logger.warning('FN:get_asset_by_id asset_id:{} error:{}'.format(asset_id, str(e)))
+                quality_score = 75 if columns_list else 0
+                operational_metadata['data_quality_score'] = quality_score
+        elif cached_score is not None:
+            quality_score = cached_score
+        else:
+            quality_score = 0
+            operational_metadata['data_quality_score'] = quality_score
+        
         result = {
             "id": asset.id,
             "name": asset.name,
@@ -1043,9 +1245,9 @@ def get_asset_by_id(asset_id):
             "catalog": asset.catalog,
             "connector_id": asset.connector_id,
             "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
-            "columns": asset.columns or [],
+            "columns": normalize_columns(asset.columns or []),
             "technical_metadata": asset.technical_metadata or {},
-            "operational_metadata": asset.operational_metadata or {},
+            "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata or {}
         }
         
@@ -1078,6 +1280,79 @@ def get_asset_by_id(asset_id):
     finally:
         db.close()
 
+@app.route('/api/assets/<asset_id>/columns/<column_name>/pii', methods=['PUT'])
+@handle_error
+def update_column_pii(asset_id, column_name):
+    """Update PII status for a specific column"""
+    db = SessionLocal()
+    try:
+        asset = db.query(Asset).filter(Asset.id == asset_id).first()
+        if not asset:
+            return jsonify({"error": "Asset not found"}), 404
+
+        data = request.json
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        columns = asset.columns or []
+        column_found = False
+        
+        # Update the specific column's PII status
+        for col in columns:
+            if col.get('name') == column_name:
+                pii_detected = data.get('pii_detected', False)
+                col['pii_detected'] = pii_detected
+                # Set pii_types based on pii_detected status
+                if pii_detected:
+                    # If marking as PII, use provided types or default to ['PII']
+                    col['pii_types'] = data.get('pii_types', ['PII'])
+                    # Store masking logic for analytical and operational users
+                    # Always save masking logic if provided, even if updating existing PII column
+                    if 'masking_logic_analytical' in data:
+                        col['masking_logic_analytical'] = data.get('masking_logic_analytical')
+                    if 'masking_logic_operational' in data:
+                        col['masking_logic_operational'] = data.get('masking_logic_operational')
+                else:
+                    # If marking as non-PII, clear the types and masking logic
+                    col['pii_types'] = None
+                    col['masking_logic_analytical'] = None
+                    col['masking_logic_operational'] = None
+                column_found = True
+                break
+        
+        if not column_found:
+            return jsonify({"error": f"Column '{column_name}' not found in asset"}), 404
+
+        asset.columns = columns
+        flag_modified(asset, "columns")  # Mark JSON column as modified for SQLAlchemy
+        db.commit()
+        db.refresh(asset)
+
+        # Log masking logic save for debugging
+        updated_col = next((col for col in columns if col.get('name') == column_name), None)
+        masking_analytical = updated_col.get('masking_logic_analytical') if updated_col else None
+        masking_operational = updated_col.get('masking_logic_operational') if updated_col else None
+        
+        logger.info('FN:update_column_pii asset_id:{} column_name:{} pii_detected:{} masking_analytical:{} masking_operational:{}'.format(
+            asset_id, column_name, data.get('pii_detected'), masking_analytical, masking_operational
+        ))
+
+        updated_column = next((col for col in columns if col.get('name') == column_name), None)
+        return jsonify({
+            "success": True,
+            "message": f"PII status updated for column '{column_name}'",
+            "column": normalize_column_schema(updated_column) if updated_column else None
+        }), 200
+    except Exception as e:
+        db.rollback()
+        logger.error('FN:update_column_pii asset_id:{} column_name:{} error:{}'.format(asset_id, column_name, str(e)), exc_info=True)
+        if app.config.get("DEBUG"):
+            return jsonify({"error": str(e)}), 400
+        else:
+            return jsonify({"error": "Failed to update column PII status"}), 400
+    finally:
+        db.close()
+
 @app.route('/api/assets/<asset_id>', methods=['PUT'])
 @handle_error
 def update_asset(asset_id):
@@ -1094,12 +1369,16 @@ def update_asset(asset_id):
 
         if 'business_metadata' in data:
             asset.business_metadata = data['business_metadata']
+            flag_modified(asset, "business_metadata")
         if 'technical_metadata' in data:
             asset.technical_metadata = data['technical_metadata']
+            flag_modified(asset, "technical_metadata")
         if 'operational_metadata' in data:
             asset.operational_metadata = data['operational_metadata']
+            flag_modified(asset, "operational_metadata")
         if 'columns' in data:
             asset.columns = data['columns']
+            flag_modified(asset, "columns")
 
         db.commit()
         db.refresh(asset)
@@ -1132,6 +1411,90 @@ def update_asset(asset_id):
 def not_found(error):
     
     return jsonify({"error": "Resource not found"}), 404
+
+@app.route('/api/metadata-tags', methods=['GET'])
+@handle_error
+def get_metadata_tags():
+    """Get all metadata tags from torro_api.metadata_tags table"""
+    try:
+        import pymysql
+        from config import config
+        
+        env = os.getenv("FLASK_ENV", "development")
+        active_config = config.get(env, config["default"])
+        
+        DB_HOST = active_config.DB_HOST
+        DB_PORT = int(active_config.DB_PORT) if active_config.DB_PORT else 3306
+        DB_USER = active_config.DB_USER
+        DB_PASSWORD = active_config.DB_PASSWORD
+        
+        # Connect to torro_api database
+        connection = pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database='torro_api',
+            charset='utf8mb4'
+        )
+        
+        try:
+            cursor = connection.cursor(pymysql.cursors.DictCursor)
+            
+            # Get workspace_id from query params if provided
+            workspace_id = request.args.get('workspace_id', type=int)
+            
+            # Build query
+            if workspace_id:
+                cursor.execute("""
+                    SELECT id, workspace_id, tag_identifier, tag_name, description, platform, external_id, properties
+                    FROM metadata_tags
+                    WHERE is_deleted = 0 AND workspace_id = %s
+                    ORDER BY tag_name ASC
+                """, (workspace_id,))
+            else:
+                cursor.execute("""
+                    SELECT id, workspace_id, tag_identifier, tag_name, description, platform, external_id, properties
+                    FROM metadata_tags
+                    WHERE is_deleted = 0
+                    ORDER BY tag_name ASC
+                """)
+            
+            tags = cursor.fetchall()
+            
+            # Convert to list of dicts
+            result = []
+            for tag in tags:
+                result.append({
+                    'id': tag['id'],
+                    'workspace_id': tag['workspace_id'],
+                    'tag_identifier': tag['tag_identifier'],
+                    'tag_name': tag['tag_name'],
+                    'description': tag['description'],
+                    'platform': tag['platform'],
+                    'external_id': tag['external_id'],
+                    'properties': tag['properties']
+                })
+            
+            logger.info('FN:get_metadata_tags count:{} workspace_id:{}'.format(len(result), workspace_id))
+            
+            return jsonify({
+                "tags": result,
+                "count": len(result)
+            }), 200
+            
+        finally:
+            connection.close()
+            
+    except ImportError:
+        logger.error('FN:get_metadata_tags error:pymysql not available')
+        return jsonify({"error": "Database connection not available"}), 503
+    except Exception as e:
+        logger.error('FN:get_metadata_tags error:{}'.format(str(e)), exc_info=True)
+        if app.config.get("DEBUG"):
+            return jsonify({"error": str(e)}), 400
+        else:
+            return jsonify({"error": "Failed to fetch metadata tags"}), 400
 
 @app.route('/api/connections/<int:connection_id>/list-files', methods=['GET'])
 @handle_error
@@ -1590,7 +1953,7 @@ def build_operational_metadata(azure_properties, current_date):
 
     owner = azure_properties.get("metadata", {}).get("owner") if azure_properties else None
     if not owner:
-        owner = "system"
+        owner = "workspace_owner@hdfc.bank.in"
     
 
     access_level = "internal"
@@ -1617,7 +1980,7 @@ def build_operational_metadata(azure_properties, current_date):
         "etag": azure_properties.get("etag", "").strip('"') if azure_properties and azure_properties.get("etag") else None
     })
 
-def build_business_metadata(blob_info, azure_properties, file_extension, container_name):
+def build_business_metadata(blob_info, azure_properties, file_extension, container_name, application_name=None):
     azure_metadata = azure_properties.get("metadata", {}) if azure_properties else {}
     
 
@@ -1625,7 +1988,7 @@ def build_business_metadata(blob_info, azure_properties, file_extension, contain
     
 
     description = azure_metadata.get("description") or f"Azure Blob Storage file: {blob_info.get('name', 'unknown')}"
-    business_owner = azure_metadata.get("business_owner") or azure_metadata.get("owner") or "system"
+    business_owner = azure_metadata.get("business_owner") or azure_metadata.get("owner") or "workspace_owner@hdfc.bank.in"
     department = azure_metadata.get("department") or "Data Engineering"
     classification = azure_metadata.get("classification") or "internal"
     sensitivity_level = azure_metadata.get("sensitivity_level") or azure_metadata.get("sensitivity") or "medium"
@@ -1652,7 +2015,7 @@ def build_business_metadata(blob_info, azure_properties, file_extension, contain
         "classification": str(classification),
         "sensitivity_level": str(sensitivity_level),
         "tags": tags,
-
+        "application_name": application_name,  # Store application name for filtering
         "container": container_name,
         "content_language": azure_properties.get("content_language") if azure_properties else None,
         "azure_metadata_tags": azure_metadata
@@ -2114,8 +2477,11 @@ def discover_assets(connection_id):
                                 file_sample = None
                                 try:
                                     if file_extension == "parquet":
-
-                                        file_sample = blob_client.get_blob_tail(container_name, blob_path, max_bytes=8192)
+                                        # SMART APPROACH: Download footer (256KB default, or exact size if smaller)
+                                        # Reads footer length from last 8 bytes to get exact footer size
+                                        # This ensures COMPLETE schema extraction even for files with 100+ columns
+                                        # For 4,000 files: ~1GB vs 40GB with full download
+                                        file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
                                     elif file_extension in ["csv", "json"]:
 
                                         file_sample = blob_client.get_blob_sample(container_name, blob_path, max_bytes=8192)
@@ -2144,10 +2510,36 @@ def discover_assets(connection_id):
                                 
 
                                 if existing_asset:
+                                    # ALWAYS re-run PII detection even if schema hasn't changed
+                                    # This ensures PII detection improvements are applied to existing assets
                                     if not should_update:
-                                        logger.info('FN:discover_assets blob_path:{} existing_asset_id:{} message:Skipping unchanged asset (deduplication)'.format(blob_path, existing_asset.id))
+                                        # Schema hasn't changed, but we still need to update PII detection
+                                        logger.info('FN:discover_assets blob_path:{} existing_asset_id:{} message:Re-running PII detection on unchanged asset'.format(blob_path, existing_asset.id))
+                                        # Re-extract metadata to get updated PII detection
+                                        enhanced_blob_info = {**blob_info, **azure_properties}
+                                        if file_sample:
+                                            metadata = extract_file_metadata(enhanced_blob_info, file_sample)
+                                        else:
+                                            metadata = extract_file_metadata(enhanced_blob_info, None)
+                                        
+                                        # Update columns with new PII detection
+                                        existing_asset.columns = clean_for_json(metadata.get("schema_json", {}).get("columns", []))
+                                        existing_asset.operational_metadata = {
+                                            **(existing_asset.operational_metadata or {}),
+                                            "last_updated_by": "azure_blob_discovery",
+                                            "last_updated_at": datetime.utcnow().isoformat(),
+                                            "pii_re_detected_at": datetime.utcnow().isoformat()
+                                        }
+                                        thread_db.commit()
+                                        thread_db.refresh(existing_asset)
                                         thread_db.close()
-                                        return None
+                                        return {
+                                            "action": "pii_updated",
+                                            "asset": existing_asset,
+                                            "name": asset_name,
+                                            "folder": asset_folder,
+                                            "container": container_name
+                                        }
                                     else:
                                         logger.info('FN:discover_assets blob_path:{} existing_asset_id:{} schema_changed:{} message:Updating existing asset'.format(blob_path, existing_asset.id, schema_changed))
                                 
@@ -2183,7 +2575,8 @@ def discover_assets(connection_id):
                                         blob_info=enhanced_blob_info,
                                         azure_properties=azure_properties,
                                         file_extension=file_extension,
-                                        container_name=container_name
+                                        container_name=container_name,
+                                        application_name=config_data.get("application_name")
                                     )
                                     
                                     existing_asset.technical_metadata = technical_meta
@@ -2233,7 +2626,8 @@ def discover_assets(connection_id):
                                         blob_info=enhanced_blob_info,
                                         azure_properties=azure_properties,
                                         file_extension=file_extension,
-                                        container_name=container_name
+                                        container_name=container_name,
+                                        application_name=config_data.get("application_name")
                                     )
                                     
                                     columns_clean = clean_for_json(metadata.get("schema_json", {}).get("columns", []))
@@ -3010,7 +3404,13 @@ def approve_asset(asset_id):
         flag_modified(asset, "operational_metadata")
         
 
-        discovery = db.query(DataDiscovery).filter(DataDiscovery.asset_id == asset_id).first()
+        # Only update existing discovery records - don't create new ones
+        # Discovery records should be created during the discovery process, not during approval
+        # Use the same logic as GET endpoint: get the discovery record with the highest ID
+        # This ensures we update the same record that the GET endpoint will return
+        discovery = db.query(DataDiscovery).filter(
+            DataDiscovery.asset_id == asset_id
+        ).order_by(DataDiscovery.id.desc()).first()
         if discovery:
             discovery.approval_status = "approved"
             discovery.status = "approved"
@@ -3019,27 +3419,11 @@ def approve_asset(asset_id):
             discovery.approval_workflow["approved_at"] = approval_time.isoformat()
             discovery.approval_workflow["approved_by"] = "user"
             flag_modified(discovery, "approval_workflow")
-        else:
-
-            discovery = DataDiscovery(
-                asset_id=asset_id,
-                storage_location=asset.technical_metadata.get("storage_location", {}) if asset.technical_metadata else {},
-                file_metadata=asset.technical_metadata if asset.technical_metadata else {},
-                schema_json=asset.columns if asset.columns else {},
-                schema_hash=asset.technical_metadata.get("schema_hash", "") if asset.technical_metadata else "",
-                status="approved",
-                approval_status="approved",
-                approval_workflow={
-                    "approved_at": approval_time.isoformat(),
-                    "approved_by": "user"
-                },
-                discovered_at=asset.discovered_at if asset.discovered_at else approval_time
-            )
-            db.add(discovery)
         
         db.commit()
         db.refresh(asset)
-        db.refresh(discovery)
+        if discovery:
+            db.refresh(discovery)
         
 
         logger.info('FN:approve_asset asset_id:{} approval_status:{} saved_to_db:True'.format(
@@ -3047,7 +3431,7 @@ def approve_asset(asset_id):
         ))
         
 
-        return jsonify({
+        response_data = {
             "id": asset.id,
             "name": asset.name,
             "type": asset.type,
@@ -3059,9 +3443,14 @@ def approve_asset(asset_id):
             "business_metadata": asset.business_metadata,
             "columns": asset.columns,
             "approval_status": "approved",
-            "discovery_id": discovery.id,
             "updated_at": approval_time.isoformat()
-        }), 200
+        }
+        
+        # Only include discovery_id if a discovery record exists
+        if discovery:
+            response_data["discovery_id"] = discovery.id
+        
+        return jsonify(response_data), 200
     except Exception as e:
         db.rollback()
         logger.error('FN:approve_asset asset_id:{} error:{}'.format(asset_id, str(e)), exc_info=True)
@@ -3094,7 +3483,13 @@ def reject_asset(asset_id):
         flag_modified(asset, "operational_metadata")
         
 
-        discovery = db.query(DataDiscovery).filter(DataDiscovery.asset_id == asset_id).first()
+        # Only update existing discovery records - don't create new ones
+        # Discovery records should be created during the discovery process, not during rejection
+        # Use the same logic as GET endpoint: get the discovery record with the highest ID
+        # This ensures we update the same record that the GET endpoint will return
+        discovery = db.query(DataDiscovery).filter(
+            DataDiscovery.asset_id == asset_id
+        ).order_by(DataDiscovery.id.desc()).first()
         if discovery:
             discovery.approval_status = "rejected"
             discovery.status = "rejected"
@@ -3104,42 +3499,30 @@ def reject_asset(asset_id):
             discovery.approval_workflow["rejected_by"] = "user"
             discovery.approval_workflow["rejection_reason"] = reason
             flag_modified(discovery, "approval_workflow")
-        else:
-
-            discovery = DataDiscovery(
-                asset_id=asset_id,
-                storage_location=asset.technical_metadata.get("storage_location", {}) if asset.technical_metadata else {},
-                file_metadata=asset.technical_metadata if asset.technical_metadata else {},
-                schema_json=asset.columns if asset.columns else {},
-                schema_hash=asset.technical_metadata.get("schema_hash", "") if asset.technical_metadata else "",
-                status="rejected",
-                approval_status="rejected",
-                approval_workflow={
-                    "rejected_at": rejection_time.isoformat(),
-                    "rejected_by": "user",
-                    "rejection_reason": reason
-                },
-                discovered_at=asset.discovered_at if asset.discovered_at else rejection_time
-            )
-            db.add(discovery)
         
         db.commit()
         db.refresh(asset)
-        db.refresh(discovery)
+        if discovery:
+            db.refresh(discovery)
         
 
         logger.info('FN:reject_asset asset_id:{} approval_status:{} saved_to_db:True'.format(
             asset_id, asset.operational_metadata.get("approval_status")
         ))
         
-        return jsonify({
+        response_data = {
             "id": asset.id,
             "name": asset.name,
             "approval_status": "rejected",
-            "discovery_id": discovery.id,
             "rejection_reason": reason,
             "updated_at": rejection_time.isoformat()
-        }), 200
+        }
+        
+        # Only include discovery_id if a discovery record exists
+        if discovery:
+            response_data["discovery_id"] = discovery.id
+        
+        return jsonify(response_data), 200
     except Exception as e:
         db.rollback()
         logger.error('FN:reject_asset asset_id:{} error:{}'.format(asset_id, str(e)), exc_info=True)
@@ -3177,39 +3560,36 @@ def publish_asset(asset_id):
         flag_modified(asset, "operational_metadata")
         
 
-        discovery = db.query(DataDiscovery).filter(DataDiscovery.asset_id == asset_id).first()
+        # Only update existing discovery records - don't create new ones
+        # Discovery records should be created during the discovery process, not during publishing
+        # Use the same logic as GET endpoint: get the discovery record with the highest ID
+        # This ensures we update the same record that the GET endpoint will return
+        discovery = db.query(DataDiscovery).filter(
+            DataDiscovery.asset_id == asset_id
+        ).order_by(DataDiscovery.id.desc()).first()
         if discovery:
             discovery.status = "published"
             discovery.published_at = publish_time
             discovery.published_to = published_to
-        else:
-
-            discovery = DataDiscovery(
-                asset_id=asset_id,
-                storage_location=asset.technical_metadata.get("storage_location", {}) if asset.technical_metadata else {},
-                file_metadata=asset.technical_metadata if asset.technical_metadata else {},
-                schema_json=asset.columns if asset.columns else {},
-                schema_hash=asset.technical_metadata.get("schema_hash", "") if asset.technical_metadata else "",
-                status="published",
-                approval_status="approved",
-                published_at=publish_time,
-                published_to=published_to,
-                discovered_at=asset.discovered_at if asset.discovered_at else publish_time
-            )
-            db.add(discovery)
         
         db.commit()
         db.refresh(asset)
-        db.refresh(discovery)
+        if discovery:
+            db.refresh(discovery)
         
-        return jsonify({
+        response_data = {
             "id": asset.id,
             "name": asset.name,
             "status": "published",
-            "discovery_id": discovery.id,
             "published_to": published_to,
             "published_at": publish_time.isoformat()
-        }), 200
+        }
+        
+        # Only include discovery_id if a discovery record exists
+        if discovery:
+            response_data["discovery_id"] = discovery.id
+        
+        return jsonify(response_data), 200
     except Exception as e:
         db.rollback()
         logger.error('FN:publish_asset asset_id:{} error:{}'.format(asset_id, str(e)), exc_info=True)

@@ -122,12 +122,17 @@ def check_file_exists(
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            sql = 
+            sql = """
                 SELECT id, technical_metadata, operational_metadata
                 FROM assets
                 WHERE connector_id = %s
-    Determine if we should insert/update a record.
-    Returns: (should_insert_or_update, schema_changed)
-    - Only update full record if schema actually changed, not for metadata-only updates
-    - For new records, always insert
-    - For existing records with only file_hash change, just update last_checked_at (not full record)
+            """
+            cursor.execute(sql, (storage_identifier,))
+            result = cursor.fetchone()
+            return result
+    except Exception as e:
+        logger.error(f'Error checking file existence: {e}')
+        return None
+    finally:
+        if conn:
+            conn.close()

@@ -32,6 +32,16 @@ import {
   CircularProgress,
   Pagination,
   Stack,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
+  Checkbox,
+  FormGroup,
+  FormLabel,
+  Tooltip,
+  IconButton,
+  Menu,
+  ListItemText,
 } from '@mui/material';
 import {
   Search,
@@ -45,29 +55,107 @@ import {
   ThumbUp,
   ThumbDown,
   Publish,
+  Add,
+  Edit,
+  Save,
 } from '@mui/icons-material';
 
 const AssetsPage = () => {
   const navigate = useNavigate();
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
-  const [catalogFilter, setCatalogFilter] = useState('');
-  const [approvalStatusFilter, setApprovalStatusFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState([]);
+  const [catalogFilter, setCatalogFilter] = useState([]);
+  const [approvalStatusFilter, setApprovalStatusFilter] = useState([]);
+  const [applicationNameFilter, setApplicationNameFilter] = useState([]);
+  
+  // Menu anchors for multi-select filters
+  const [typeMenuAnchor, setTypeMenuAnchor] = useState(null);
+  const [catalogMenuAnchor, setCatalogMenuAnchor] = useState(null);
+  const [statusMenuAnchor, setStatusMenuAnchor] = useState(null);
+  const [applicationMenuAnchor, setApplicationMenuAnchor] = useState(null);
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
   const [classification, setClassification] = useState('internal');
   const [sensitivityLevel, setSensitivityLevel] = useState('medium');
+  const [department, setDepartment] = useState('Data Engineering');
   const [originalClassification, setOriginalClassification] = useState('internal');
   const [originalSensitivityLevel, setOriginalSensitivityLevel] = useState('medium');
+  const [originalDepartment, setOriginalDepartment] = useState('Data Engineering');
   const [savingMetadata, setSavingMetadata] = useState(false);
+  
+  // Available departments
+  const DEPARTMENTS = [
+    'Data Engineering',
+    'Data Science',
+    'Business Intelligence',
+    'IT Operations',
+    'Security & Compliance',
+    'Finance',
+    'Risk Management',
+    'Customer Analytics',
+    'Product Development',
+    'Marketing',
+    'Sales',
+    'Human Resources',
+    'Legal',
+    'Operations',
+    'Other'
+  ];
   
   
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [selectedRejectReason, setSelectedRejectReason] = useState('');
+  const [customRejectReason, setCustomRejectReason] = useState('');
   const [assetToReject, setAssetToReject] = useState(null);
+  
+  // Column editing state
+  const [editingColumn, setEditingColumn] = useState(null);
+  const [columnEditData, setColumnEditData] = useState({});
+  const [savingColumn, setSavingColumn] = useState(false);
+  
+  // Business Glossary Tag state
+  const [description, setDescription] = useState('');
+  const [originalDescription, setOriginalDescription] = useState('');
+  const [defaultDescription, setDefaultDescription] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [tagDialogOpen, setTagDialogOpen] = useState(false);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [loadingTags, setLoadingTags] = useState(false);
+  const [selectedTag, setSelectedTag] = useState('');
+  
+  // Governance rejection reasons
+  const GOVERNANCE_REJECTION_REASONS = [
+    { code: '001', reason: 'Data Quality Issues - Incomplete or inaccurate data', tag: 'Data Quality' },
+    { code: '002', reason: 'Data Privacy Violation - Contains sensitive PII without proper controls', tag: 'Privacy Violation' },
+    { code: '003', reason: 'Compliance Risk - Does not meet regulatory requirements', tag: 'Compliance Risk' },
+    { code: '004', reason: 'Data Classification Mismatch - Incorrect sensitivity level assigned', tag: 'Classification Mismatch' },
+    { code: '005', reason: 'Archive / Duplicate - Redundant or archived data', tag: 'Archive/Duplicate' },
+    { code: '006', reason: 'Data Lineage Issues - Missing or incorrect lineage information', tag: 'Lineage Issues' },
+    { code: '007', reason: 'Metadata Incomplete - Missing required metadata fields', tag: 'Incomplete Metadata' },
+    { code: '008', reason: 'Data Retention Policy Violation - Exceeds retention period', tag: 'Retention Violation' },
+    { code: '009', reason: 'Access Control Issues - Improper access permissions', tag: 'Access Control' },
+    { code: '010', reason: 'Data Source Not Authorized - Source not approved for use', tag: 'Unauthorized Source' },
+    { code: '011', reason: 'Others', tag: 'Rejected' }
+  ];
+  
+  // Get short tag name for rejection reason
+  const getRejectionTag = (reasonCode, customReason = '') => {
+    if (reasonCode === '011') {
+      // For "Others", use first 2 words of custom reason or "Rejected"
+      if (customReason.trim()) {
+        const words = customReason.trim().split(/\s+/).slice(0, 2);
+        return words.join(' ');
+      }
+      return 'Rejected';
+    }
+    const selected = GOVERNANCE_REJECTION_REASONS.find(r => r.code === reasonCode);
+    return selected ? selected.tag : 'Rejected';
+  };
   
   
   const [discoveryDetailsOpen, setDiscoveryDetailsOpen] = useState(false);
@@ -77,11 +165,90 @@ const AssetsPage = () => {
   const [pageSize, setPageSize] = useState(50);
   const [totalAssets, setTotalAssets] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
-  const [allAssets, setAllAssets] = useState([]); 
+  const [allAssets, setAllAssets] = useState([]);
+  
+  // PII Dialog state
+  const [piiDialogOpen, setPiiDialogOpen] = useState(false);
+  const [selectedColumnForPii, setSelectedColumnForPii] = useState(null);
+  const [piiDialogIsPii, setPiiDialogIsPii] = useState(false);
+  const [piiDialogTypes, setPiiDialogTypes] = useState([]);
+  const [savingPii, setSavingPii] = useState(false);
+  const [customPiiType, setCustomPiiType] = useState('');
+  // Masking logic state - track masking logic for each column
+  const [columnMaskingLogic, setColumnMaskingLogic] = useState({});
+  // Track original PII status to detect changes from Non-PII to PII
+  const [originalPiiStatus, setOriginalPiiStatus] = useState({});
+  // Track which columns have unsaved masking logic changes
+  const [unsavedMaskingChanges, setUnsavedMaskingChanges] = useState({});
+  const [savingMaskingLogic, setSavingMaskingLogic] = useState({}); 
+
+  // Fetch metadata tags when tag dialog opens (always fetch fresh from DB)
+  useEffect(() => {
+    if (tagDialogOpen) {
+      fetchMetadataTags();
+    }
+  }, [tagDialogOpen]);
+
+  // Initialize masking logic from column data when asset is selected
+  useEffect(() => {
+    if (selectedAsset?.columns) {
+      const initialMaskingLogic = {};
+      selectedAsset.columns.forEach(col => {
+        if (col.pii_detected) {
+          initialMaskingLogic[col.name] = {
+            analytical: col.masking_logic_analytical || '',
+            operational: col.masking_logic_operational || ''
+          };
+        }
+      });
+      setColumnMaskingLogic(prev => {
+        // Merge with existing to preserve unsaved changes
+        return { ...initialMaskingLogic, ...prev };
+      });
+    }
+  }, [selectedAsset]);
+
+  const fetchMetadataTags = async () => {
+    setLoadingTags(true);
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const response = await fetch(`${API_BASE_URL}/api/metadata-tags`);
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Fetched metadata tags:', data);
+        setAvailableTags(data.tags || []);
+      } else {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('Failed to fetch metadata tags:', response.status, errorData);
+        alert(`Failed to fetch tags: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error fetching metadata tags:', error);
+      alert(`Error fetching tags: ${error.message}`);
+    } finally {
+      setLoadingTags(false);
+    }
+  };
+
+  const handleAddTagToDescription = () => {
+    if (selectedTag) {
+      const tag = availableTags.find(t => t.id.toString() === selectedTag);
+      if (tag && !selectedTags.find(t => t.id === tag.id)) {
+        // Add tag to array if not already present
+        setSelectedTags(prev => [...prev, tag]);
+        setSelectedTag('');
+        setTagDialogOpen(false);
+      }
+    }
+  };
+
+  const handleRemoveTag = (tagId) => {
+    setSelectedTags(prev => prev.filter(t => t.id !== tagId));
+  };
 
   useEffect(() => {
     fetchAssets();
-  }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter, approvalStatusFilter]);
+  }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter, approvalStatusFilter, applicationNameFilter]);
 
   const fetchAssets = async (pageOverride = null) => {
       setLoading(true);
@@ -130,16 +297,22 @@ const AssetsPage = () => {
             (asset.catalog && asset.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
           );
         }
-        if (typeFilter) {
-          filtered = filtered.filter(asset => asset.type === typeFilter);
+        if (typeFilter.length > 0) {
+          filtered = filtered.filter(asset => typeFilter.includes(asset.type));
         }
-        if (catalogFilter) {
-          filtered = filtered.filter(asset => asset.catalog === catalogFilter);
+        if (catalogFilter.length > 0) {
+          filtered = filtered.filter(asset => catalogFilter.includes(asset.catalog));
         }
-        if (approvalStatusFilter) {
+        if (approvalStatusFilter.length > 0) {
           filtered = filtered.filter(asset => {
             const status = asset.operational_metadata?.approval_status || 'pending_review';
-            return status === approvalStatusFilter;
+            return approvalStatusFilter.includes(status);
+          });
+        }
+        if (applicationNameFilter.length > 0) {
+          filtered = filtered.filter(asset => {
+            const appName = asset.business_metadata?.application_name || '';
+            return applicationNameFilter.includes(appName);
           });
         }
         
@@ -162,6 +335,7 @@ const AssetsPage = () => {
   
   const uniqueTypes = [...new Set(allAssets.map(asset => asset.type))];
   const uniqueCatalogs = [...new Set(allAssets.map(asset => asset.catalog))];
+  const uniqueApplicationNames = [...new Set(allAssets.map(asset => asset.business_metadata?.application_name).filter(Boolean))];
 
   const getDataSource = (connectorId) => {
     if (!connectorId) return 'Unknown';
@@ -249,16 +423,22 @@ const AssetsPage = () => {
             (a.catalog && a.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
           );
         }
-        if (typeFilter) {
-          filtered = filtered.filter(a => a.type === typeFilter);
+        if (typeFilter.length > 0) {
+          filtered = filtered.filter(a => typeFilter.includes(a.type));
         }
-        if (catalogFilter) {
-          filtered = filtered.filter(a => a.catalog === catalogFilter);
+        if (catalogFilter.length > 0) {
+          filtered = filtered.filter(a => catalogFilter.includes(a.catalog));
         }
-        if (approvalStatusFilter) {
+        if (approvalStatusFilter.length > 0) {
           filtered = filtered.filter(a => {
             const status = a.operational_metadata?.approval_status || 'pending_review';
-            return status === approvalStatusFilter;
+            return approvalStatusFilter.includes(status);
+          });
+        }
+        if (applicationNameFilter.length > 0) {
+          filtered = filtered.filter(a => {
+            const appName = a.business_metadata?.application_name || '';
+            return applicationNameFilter.includes(appName);
           });
         }
         const page = currentPage;
@@ -284,20 +464,49 @@ const AssetsPage = () => {
   const handleRejectClick = (assetId) => {
     setAssetToReject(assetId);
     setRejectReason('');
+    setSelectedRejectReason('');
+    setCustomRejectReason('');
     setRejectDialogOpen(true);
   };
 
   const handleRejectConfirm = async () => {
     if (!assetToReject) return;
-    if (!rejectReason.trim()) {
-      alert('Please provide a reason for rejection');
-      return;
+    
+    // Determine the final rejection reason
+    let finalReason = '';
+    if (selectedRejectReason === '011') {
+      // "Others" selected - use custom reason
+      if (!customRejectReason.trim()) {
+        alert('Please provide a reason for rejection');
+        return;
+      }
+      finalReason = customRejectReason.trim();
+    } else {
+      // Predefined reason selected
+      if (!selectedRejectReason) {
+        alert('Please select a reason for rejection');
+        return;
+      }
+      const selected = GOVERNANCE_REJECTION_REASONS.find(r => r.code === selectedRejectReason);
+      finalReason = selected ? `${selected.code} - ${selected.reason}` : selectedRejectReason;
     }
     
     setRejectDialogOpen(false);
     
     
     const asset = allAssets.find(a => a.id === assetToReject);
+    
+    // Add rejection reason as a short table tag (1-2 words)
+    const shortTag = getRejectionTag(selectedRejectReason, customRejectReason);
+    const rejectionTag = `REJECTED: ${shortTag}`;
+    const existingTags = asset?.business_metadata?.tags || [];
+    
+    // Remove any existing REJECTED tag, filter out "torrocon", and add the new one
+    const filteredTags = existingTags
+      .filter(tag => !tag.startsWith('REJECTED:') && tag.toLowerCase() !== 'torrocon')
+      .filter(tag => tag.trim() !== ''); // Also filter out empty tags
+    filteredTags.push(rejectionTag);
+    
     if (asset) {
       const updatedAsset = {
         ...asset,
@@ -305,7 +514,11 @@ const AssetsPage = () => {
           ...asset.operational_metadata,
           approval_status: 'rejected',
           rejected_at: new Date().toISOString(),
-          rejection_reason: rejectReason
+          rejection_reason: finalReason
+        },
+        business_metadata: {
+          ...asset.business_metadata,
+          tags: filteredTags
         }
       };
       setAllAssets(prev => prev.map(a => a.id === assetToReject ? updatedAsset : a));
@@ -314,21 +527,41 @@ const AssetsPage = () => {
     
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets/${assetToReject}/reject`, {
+      
+      // First, reject the asset
+      const rejectResponse = await fetch(`${API_BASE_URL}/api/assets/${assetToReject}/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ reason: rejectReason }),
+        body: JSON.stringify({ reason: finalReason }),
       });
       
-      if (response.ok) {
-        const result = await response.json();
+      if (!rejectResponse.ok) {
+        const errorData = await rejectResponse.json();
+        throw new Error(errorData.error || 'Failed to reject asset');
+      }
+      
+      // Then, update the business metadata with the tag
+      const updateResponse = await fetch(`${API_BASE_URL}/api/assets/${assetToReject}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          business_metadata: {
+            ...asset?.business_metadata,
+            tags: filteredTags
+          }
+        }),
+      });
+      
+      if (updateResponse.ok) {
         await fetchAssets();
       } else {
         await fetchAssets();
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to reject asset');
+        const errorData = await updateResponse.json();
+        throw new Error(errorData.error || 'Failed to update tags');
       }
     } catch (error) {
       await fetchAssets();
@@ -339,6 +572,8 @@ const AssetsPage = () => {
     } finally {
       setAssetToReject(null);
       setRejectReason('');
+      setSelectedRejectReason('');
+      setCustomRejectReason('');
     }
   };
 
@@ -348,6 +583,9 @@ const AssetsPage = () => {
       alert('Asset not found');
       return;
     }
+
+    // Show loader
+    setPublishing(true);
 
     const updatedAsset = {
       ...asset,
@@ -376,6 +614,7 @@ const AssetsPage = () => {
         const discoveryId = result.discovery_id;
         
         if (!discoveryId) {
+          setPublishing(false);
           throw new Error('Discovery ID not returned from publish endpoint');
         }
         
@@ -387,6 +626,7 @@ const AssetsPage = () => {
         });
         
         if (!discoveryResponse.ok) {
+          setPublishing(false);
           throw new Error('Failed to fetch discovery details');
         }
         
@@ -399,19 +639,17 @@ const AssetsPage = () => {
         
         await fetchAssets();
         
-        navigate(`/app/dataOnboarding?id=${discoveryId}`, {
-          state: { 
-            discovery: discoveryData,
-            asset: updatedAsset,
-            discoveryId: discoveryId
-          }
-        });
+        // Navigate directly to /app/dataOnboarding without /airflow-fe prefix
+        // Keep loader visible until navigation completes
+        window.location.href = `/app/dataOnboarding?id=${discoveryId}`;
       } else {
+        setPublishing(false);
         await fetchAssets();
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to publish asset');
       }
     } catch (error) {
+      setPublishing(false);
       await fetchAssets();
       if (import.meta.env.DEV) {
         console.error('Error publishing asset:', error);
@@ -428,10 +666,40 @@ const AssetsPage = () => {
       // Asset already loaded - use it directly (instant!)
       setSelectedAsset(cachedAsset);
       setDetailsDialogOpen(true);
-      setOriginalClassification(cachedAsset.business_metadata?.classification || 'internal');
-      setOriginalSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
-      setClassification(cachedAsset.business_metadata?.classification || 'internal');
-      setSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+        setOriginalClassification(cachedAsset.business_metadata?.classification || 'internal');
+        setOriginalSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+        setOriginalDepartment(cachedAsset.business_metadata?.department || 'Data Engineering');
+        setClassification(cachedAsset.business_metadata?.classification || 'internal');
+        setSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
+        setDepartment(cachedAsset.business_metadata?.department || 'Data Engineering');
+        
+        // Set default description
+        const defaultDesc = `Azure Blob Storage file: ${cachedAsset.name}`;
+        setDefaultDescription(defaultDesc);
+        
+        // Parse description to extract tags if stored as JSON array
+        const desc = cachedAsset.business_metadata?.description || '';
+        try {
+          const parsedTags = JSON.parse(desc);
+          if (Array.isArray(parsedTags) && parsedTags.length > 0) {
+            setSelectedTags(parsedTags);
+            setDescription('');
+          } else {
+            setSelectedTags([]);
+            setDescription(desc || defaultDesc);
+          }
+        } catch {
+          // Not JSON, check if it's the default format or has tags
+          if (desc && desc !== defaultDesc && desc.includes('|')) {
+            // Old format with pipe-separated tags - clear it and use default
+            setSelectedTags([]);
+            setDescription(defaultDesc);
+          } else {
+            setSelectedTags([]);
+            setDescription(desc || defaultDesc);
+          }
+        }
+        setOriginalDescription(desc);
       return; // Exit early - no API call needed!
     }
     
@@ -446,8 +714,38 @@ const AssetsPage = () => {
         setDetailsDialogOpen(true);
         setOriginalClassification(asset.business_metadata?.classification || 'internal');
         setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+        setOriginalDepartment(asset.business_metadata?.department || 'Data Engineering');
         setClassification(asset.business_metadata?.classification || 'internal');
         setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
+        setDepartment(asset.business_metadata?.department || 'Data Engineering');
+        
+        // Set default description
+        const defaultDesc = `Azure Blob Storage file: ${asset.name}`;
+        setDefaultDescription(defaultDesc);
+        
+        // Parse description to extract tags if stored as JSON array
+        const desc = asset.business_metadata?.description || '';
+        try {
+          const parsedTags = JSON.parse(desc);
+          if (Array.isArray(parsedTags) && parsedTags.length > 0) {
+            setSelectedTags(parsedTags);
+            setDescription('');
+          } else {
+            setSelectedTags([]);
+            setDescription(desc || defaultDesc);
+          }
+        } catch {
+          // Not JSON, check if it's the default format or has tags
+          if (desc && desc !== defaultDesc && desc.includes('|')) {
+            // Old format with pipe-separated tags - clear it and use default
+            setSelectedTags([]);
+            setDescription(defaultDesc);
+          } else {
+            setSelectedTags([]);
+            setDescription(desc || defaultDesc);
+          }
+        }
+        setOriginalDescription(desc);
       } else {
         const errorData = await response.json();
         alert(`Failed to load asset: ${errorData.error || 'Asset not found'}`);
@@ -466,8 +764,348 @@ const AssetsPage = () => {
     setActiveTab(0);
     setClassification('internal');
     setSensitivityLevel('medium');
+    setDepartment('Data Engineering');
     setOriginalClassification('internal');
     setOriginalSensitivityLevel('medium');
+    setOriginalDepartment('Data Engineering');
+    setDescription('');
+    setOriginalDescription('');
+    setDefaultDescription('');
+    setSelectedTags([]);
+    setTagDialogOpen(false);
+    setSelectedTag('');
+  };
+
+  // PII Dialog handlers
+  const handleOpenPiiDialog = (column) => {
+    setSelectedColumnForPii(column);
+    setPiiDialogIsPii(column.pii_detected || false);
+    setPiiDialogTypes(column.pii_types || []);
+    setCustomPiiType('');
+    // Track original PII status to detect changes
+    setOriginalPiiStatus(prev => ({
+      ...prev,
+      [column.name]: column.pii_detected || false
+    }));
+    // Initialize masking logic from column data if available
+    if (!columnMaskingLogic[column.name]) {
+      setColumnMaskingLogic(prev => ({
+        ...prev,
+        [column.name]: {
+          analytical: column.masking_logic_analytical || '',
+          operational: column.masking_logic_operational || ''
+        }
+      }));
+    }
+    setPiiDialogOpen(true);
+  };
+
+  const handleClosePiiDialog = () => {
+    setPiiDialogOpen(false);
+    setSelectedColumnForPii(null);
+    setPiiDialogIsPii(false);
+    setPiiDialogTypes([]);
+    setCustomPiiType('');
+  };
+
+  const handleAddCustomPiiType = () => {
+    const trimmed = customPiiType.trim();
+    if (trimmed && !piiDialogTypes.includes(trimmed) && !PII_TYPES.includes(trimmed)) {
+      setPiiDialogTypes([...piiDialogTypes, trimmed]);
+      setCustomPiiType('');
+    }
+  };
+
+  const handleSavePii = async () => {
+    if (!selectedAsset || !selectedColumnForPii) return;
+    
+    setSavingPii(true);
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const maskingLogic = columnMaskingLogic[selectedColumnForPii.name] || { analytical: '', operational: '' };
+      const response = await fetch(
+        `${API_BASE_URL}/api/assets/${selectedAsset.id}/columns/${selectedColumnForPii.name}/pii`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pii_detected: piiDialogIsPii,
+            pii_types: piiDialogIsPii ? piiDialogTypes : null,
+            masking_logic_analytical: piiDialogIsPii ? maskingLogic.analytical : null,
+            masking_logic_operational: piiDialogIsPii ? maskingLogic.operational : null
+          })
+        }
+      );
+      
+      if (response.ok) {
+        const updatedAsset = { ...selectedAsset };
+        updatedAsset.columns = updatedAsset.columns.map(c => 
+          c.name === selectedColumnForPii.name 
+            ? { 
+                ...c, 
+                pii_detected: piiDialogIsPii, 
+                pii_types: piiDialogIsPii ? piiDialogTypes : null,
+                masking_logic_analytical: piiDialogIsPii ? maskingLogic.analytical : null,
+                masking_logic_operational: piiDialogIsPii ? maskingLogic.operational : null
+              }
+            : c
+        );
+        setSelectedAsset(updatedAsset);
+        // Also update in assets list
+        setAssets(prev => prev.map(a => 
+          a.id === selectedAsset.id ? updatedAsset : a
+        ));
+        setAllAssets(prev => prev.map(a => 
+          a.id === selectedAsset.id ? updatedAsset : a
+        ));
+        // Clear unsaved masking changes for this column
+        setUnsavedMaskingChanges(prev => {
+          const newState = { ...prev };
+          delete newState[selectedColumnForPii.name];
+          return newState;
+        });
+        handleClosePiiDialog();
+      } else {
+        throw new Error('Failed to update PII status');
+      }
+    } catch (err) {
+      console.error('Failed to update PII status:', err);
+      alert('Failed to update PII status: ' + err.message);
+    } finally {
+      setSavingPii(false);
+    }
+  };
+
+  // Handler to save masking logic changes directly from table
+  const handleSaveMaskingLogic = async (columnName) => {
+    if (!selectedAsset) return;
+    
+    const column = selectedAsset.columns.find(c => c.name === columnName);
+    if (!column || !column.pii_detected) return;
+    
+    const maskingLogic = columnMaskingLogic[columnName];
+    if (!maskingLogic) return;
+    
+    setSavingMaskingLogic(prev => ({ ...prev, [columnName]: true }));
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const response = await fetch(
+        `${API_BASE_URL}/api/assets/${selectedAsset.id}/columns/${columnName}/pii`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pii_detected: column.pii_detected,
+            pii_types: column.pii_types || [],
+            masking_logic_analytical: maskingLogic.analytical || null,
+            masking_logic_operational: maskingLogic.operational || null
+          })
+        }
+      );
+      
+      if (response.ok) {
+        const updatedAsset = { ...selectedAsset };
+        updatedAsset.columns = updatedAsset.columns.map(c => 
+          c.name === columnName 
+            ? { 
+                ...c, 
+                masking_logic_analytical: maskingLogic.analytical || null,
+                masking_logic_operational: maskingLogic.operational || null
+              }
+            : c
+        );
+        setSelectedAsset(updatedAsset);
+        // Also update in assets list
+        setAssets(prev => prev.map(a => 
+          a.id === selectedAsset.id ? updatedAsset : a
+        ));
+        setAllAssets(prev => prev.map(a => 
+          a.id === selectedAsset.id ? updatedAsset : a
+        ));
+        // Clear unsaved changes flag
+        setUnsavedMaskingChanges(prev => {
+          const newState = { ...prev };
+          delete newState[columnName];
+          return newState;
+        });
+      } else {
+        throw new Error('Failed to save masking logic');
+      }
+    } catch (err) {
+      console.error('Failed to save masking logic:', err);
+      alert('Failed to save masking logic: ' + err.message);
+    } finally {
+      setSavingMaskingLogic(prev => {
+        const newState = { ...prev };
+        delete newState[columnName];
+        return newState;
+      });
+    }
+  };
+
+  // Available PII types
+  const PII_TYPES = [
+    'Email',
+    'PhoneNumber',
+    'SSN',
+    'CreditCard',
+    'PersonName',
+    'Address',
+    'DateOfBirth',
+    'IPAddress',
+    'AccountNumber',
+    'CustomerID',
+    'TransactionID',
+    'UserID',
+    'ID',
+    'PassportNumber',
+    'DriverLicense',
+    'BankAccount',
+    'MedicalRecord',
+    'LicensePlate',
+    'Password',
+    'Gender',
+    'Race',
+    'Religion',
+  ];
+
+  // Masking logic options based on PII type
+  const MASKING_OPTIONS = {
+    'Email': {
+      analytical: [
+        { value: 'mask_domain', label: 'Mask domain (e.g., john.***@***.com)' },
+        { value: 'mask_all', label: 'Mask all (***@***.com)' },
+        { value: 'show_first_letter', label: 'Show first letter (j***@***.com)' },
+        { value: 'hash', label: 'Hash entire email' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full email' },
+        { value: 'mask_domain', label: 'Mask domain (e.g., john.***@***.com)' },
+        { value: 'show_first_letter', label: 'Show first letter (j***@***.com)' },
+        { value: 'partial_mask', label: 'Partial mask (j***@ex***.com)' }
+      ]
+    },
+    'PhoneNumber': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (***-***-****)' },
+        { value: 'show_last_4', label: 'Show last 4 digits (***-***-1234)' },
+        { value: 'hash', label: 'Hash entire number' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full number' },
+        { value: 'show_last_4', label: 'Show last 4 digits (***-***-1234)' },
+        { value: 'partial_mask', label: 'Partial mask (***-***-1234)' }
+      ]
+    },
+    'SSN': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (***-**-****)' },
+        { value: 'show_last_4', label: 'Show last 4 digits (***-**-1234)' },
+        { value: 'hash', label: 'Hash entire SSN' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full SSN' },
+        { value: 'show_last_4', label: 'Show last 4 digits (***-**-1234)' },
+        { value: 'mask_all', label: 'Mask all (***-**-****)' }
+      ]
+    },
+    'CreditCard': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (****-****-****-****)' },
+        { value: 'show_last_4', label: 'Show last 4 digits (****-****-****-1234)' },
+        { value: 'hash', label: 'Hash entire card number' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full card number' },
+        { value: 'show_last_4', label: 'Show last 4 digits (****-****-****-1234)' },
+        { value: 'mask_all', label: 'Mask all (****-****-****-****)' }
+      ]
+    },
+    'PersonName': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (***)' },
+        { value: 'show_first_letter', label: 'Show first letter (J***)' },
+        { value: 'show_initials', label: 'Show initials (J.D.)' },
+        { value: 'hash', label: 'Hash entire name' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full name' },
+        { value: 'show_first_letter', label: 'Show first letter (J***)' },
+        { value: 'show_initials', label: 'Show initials (J.D.)' },
+        { value: 'partial_mask', label: 'Partial mask (J*** D***)' }
+      ]
+    },
+    'Address': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (***)' },
+        { value: 'show_city_only', label: 'Show city only' },
+        { value: 'show_state_only', label: 'Show state only' },
+        { value: 'hash', label: 'Hash entire address' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full address' },
+        { value: 'show_city_only', label: 'Show city only' },
+        { value: 'show_state_only', label: 'Show state only' },
+        { value: 'partial_mask', label: 'Partial mask (*** Main St, City, ST)' }
+      ]
+    },
+    'DateOfBirth': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (***)' },
+        { value: 'show_year_only', label: 'Show year only (****)' },
+        { value: 'show_age_range', label: 'Show age range (20-30)' },
+        { value: 'hash', label: 'Hash entire date' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full date' },
+        { value: 'show_year_only', label: 'Show year only (****)' },
+        { value: 'show_age_range', label: 'Show age range (20-30)' }
+      ]
+    },
+    'IPAddress': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all (***.***.***.***)' },
+        { value: 'show_first_octet', label: 'Show first octet (192.***.***.***)' },
+        { value: 'hash', label: 'Hash entire IP' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full IP' },
+        { value: 'show_first_octet', label: 'Show first octet (192.***.***.***)' },
+        { value: 'partial_mask', label: 'Partial mask (192.168.***.***)' }
+      ]
+    },
+    'default': {
+      analytical: [
+        { value: 'mask_all', label: 'Mask all' },
+        { value: 'hash', label: 'Hash value' },
+        { value: 'redact', label: 'Redact completely' }
+      ],
+      operational: [
+        { value: 'show_full', label: 'Show full value' },
+        { value: 'partial_mask', label: 'Partial mask' },
+        { value: 'mask_all', label: 'Mask all' }
+      ]
+    }
+  };
+
+  // Helper function to get masking options for a column based on its PII types
+  const getMaskingOptions = (column, userType) => {
+    const piiTypes = column.pii_types || [];
+    if (piiTypes.length === 0) {
+      return MASKING_OPTIONS.default[userType] || [];
+    }
+    // Use the first PII type to determine masking options
+    const firstPiiType = piiTypes[0];
+    const options = MASKING_OPTIONS[firstPiiType]?.[userType] || MASKING_OPTIONS.default[userType] || [];
+    return options;
   };
 
   const handleSaveMetadata = async () => {
@@ -475,6 +1113,12 @@ const AssetsPage = () => {
     setSavingMetadata(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      
+      // Save tags as JSON array if tags exist, otherwise save default description
+      const descToSave = selectedTags.length > 0 
+        ? JSON.stringify(selectedTags)
+        : (description || defaultDescription);
+      
       const response = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
         method: 'PUT',
         headers: {
@@ -483,8 +1127,10 @@ const AssetsPage = () => {
         body: JSON.stringify({
           business_metadata: {
             ...selectedAsset.business_metadata,
-          classification: classification,
-          sensitivity_level: sensitivityLevel,
+            description: descToSave,
+            classification: classification,
+            sensitivity_level: sensitivityLevel,
+            department: department,
           }
         }),
       });
@@ -494,8 +1140,10 @@ const AssetsPage = () => {
         
         setAllAssets(prev => prev.map(a => a.id === updatedAsset.id ? updatedAsset : a));
         setSelectedAsset(updatedAsset);
+        setOriginalDescription(descToSave);
         setOriginalClassification(classification);
         setOriginalSensitivityLevel(sensitivityLevel);
+        setOriginalDepartment(department);
       alert('Metadata saved successfully!');
       } else {
         throw new Error('Failed to save metadata');
@@ -532,19 +1180,44 @@ const AssetsPage = () => {
     setCurrentPage(0); 
   };
 
-  const handleTypeFilterChange = (event) => {
-    setTypeFilter(event.target.value);
-    setCurrentPage(0); 
+  const handleTypeFilterChange = (type) => {
+    setTypeFilter(prev => {
+      const newFilter = prev.includes(type) 
+        ? prev.filter(t => t !== type)
+        : [...prev, type];
+      setCurrentPage(0);
+      return newFilter;
+    });
   };
 
-  const handleCatalogFilterChange = (event) => {
-    setCatalogFilter(event.target.value);
-    setCurrentPage(0); 
+  const handleCatalogFilterChange = (catalog) => {
+    setCatalogFilter(prev => {
+      const newFilter = prev.includes(catalog)
+        ? prev.filter(c => c !== catalog)
+        : [...prev, catalog];
+      setCurrentPage(0);
+      return newFilter;
+    });
   };
 
-  const handleApprovalStatusFilterChange = (event) => {
-    setApprovalStatusFilter(event.target.value);
-    setCurrentPage(0);
+  const handleApprovalStatusFilterChange = (status) => {
+    setApprovalStatusFilter(prev => {
+      const newFilter = prev.includes(status)
+        ? prev.filter(s => s !== status)
+        : [...prev, status];
+      setCurrentPage(0);
+      return newFilter;
+    });
+  };
+
+  const handleApplicationNameFilterChange = (appName) => {
+    setApplicationNameFilter(prev => {
+      const newFilter = prev.includes(appName)
+        ? prev.filter(a => a !== appName)
+        : [...prev, appName];
+      setCurrentPage(0);
+      return newFilter;
+    });
   };
 
   const handleViewDiscoveryDetails = async (discoveryId) => {
@@ -688,6 +1361,12 @@ const AssetsPage = () => {
                         return status === approvalStatusFilter;
                       });
                     }
+                    if (applicationNameFilter) {
+                      filtered = filtered.filter(asset => {
+                        const appName = asset.business_metadata?.application_name || '';
+                        return appName === applicationNameFilter;
+                      });
+                    }
                     setAssets(filtered);
                   }
                 }
@@ -725,90 +1404,138 @@ const AssetsPage = () => {
                 />
             </Grid>
             <Grid item xs={12} md={2}>
-              <FormControl fullWidth>
-                <InputLabel id="type-filter-label" shrink>Type</InputLabel>
-                <Select
-                  labelId="type-filter-label"
-                  value={typeFilter}
-                  label="Type"
-                  onChange={handleTypeFilterChange}
-                  displayEmpty
-                  notched
-                  renderValue={(selected) => {
-                    if (selected === '' || !selected) {
-                      return 'All Types';
-                    }
-                    return selected;
-                  }}
-                >
-                  <MenuItem value="">All Types</MenuItem>
-                  {uniqueTypes.map(type => (
-                    <MenuItem key={type} value={type}>{type}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setTypeMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {typeFilter.length === 0 ? 'All Types' : `${typeFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
+              <Menu
+                anchorEl={typeMenuAnchor}
+                open={Boolean(typeMenuAnchor)}
+                onClose={() => setTypeMenuAnchor(null)}
+                PaperProps={{
+                  style: {
+                    maxHeight: 300,
+                    width: 200,
+                  },
+                }}
+              >
+                {uniqueTypes.map(type => (
+                  <MenuItem key={type} onClick={() => handleTypeFilterChange(type)}>
+                    <Checkbox checked={typeFilter.includes(type)} />
+                    <ListItemText primary={type} />
+                  </MenuItem>
+                ))}
+              </Menu>
             </Grid>
             <Grid item xs={12} md={2.5}>
-              <FormControl fullWidth>
-                <InputLabel id="catalog-filter-label" shrink>Catalog</InputLabel>
-                <Select
-                  labelId="catalog-filter-label"
-                  value={catalogFilter}
-                  label="Catalog"
-                  onChange={handleCatalogFilterChange}
-                  displayEmpty
-                  notched
-                  renderValue={(selected) => {
-                    if (selected === '' || !selected) {
-                      return 'All Catalogs';
-                    }
-                    return selected;
-                  }}
-                >
-                  <MenuItem value="">All Catalogs</MenuItem>
-                  {uniqueCatalogs.map(catalog => (
-                    <MenuItem key={catalog} value={catalog}>{catalog}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} md={2.5}>
-              <FormControl fullWidth>
-                <InputLabel id="status-filter-label" shrink>Status</InputLabel>
-                <Select
-                  labelId="status-filter-label"
-                  value={approvalStatusFilter}
-                  label="Status"
-                  onChange={handleApprovalStatusFilterChange}
-                  displayEmpty
-                  notched
-                  renderValue={(selected) => {
-                    if (selected === '' || !selected) {
-                      return 'All Statuses';
-                    }
-                    if (selected === 'pending_review') {
-                      return 'Pending Review';
-                    }
-                    return selected.charAt(0).toUpperCase() + selected.slice(1);
-                  }}
-                >
-                  <MenuItem value="">All Statuses</MenuItem>
-                  <MenuItem value="pending_review">Pending Review</MenuItem>
-                  <MenuItem value="approved">Approved</MenuItem>
-                  <MenuItem value="rejected">Rejected</MenuItem>
-                </Select>
-              </FormControl>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setCatalogMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {catalogFilter.length === 0 ? 'All Catalogs' : `${catalogFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
+              <Menu
+                anchorEl={catalogMenuAnchor}
+                open={Boolean(catalogMenuAnchor)}
+                onClose={() => setCatalogMenuAnchor(null)}
+                PaperProps={{
+                  style: {
+                    maxHeight: 300,
+                    width: 200,
+                  },
+                }}
+              >
+                {uniqueCatalogs.map(catalog => (
+                  <MenuItem key={catalog} onClick={() => handleCatalogFilterChange(catalog)}>
+                    <Checkbox checked={catalogFilter.includes(catalog)} />
+                    <ListItemText primary={catalog} />
+                  </MenuItem>
+                ))}
+              </Menu>
             </Grid>
             <Grid item xs={12} md={2}>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setStatusMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {approvalStatusFilter.length === 0 ? 'All Statuses' : `${approvalStatusFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
+              <Menu
+                anchorEl={statusMenuAnchor}
+                open={Boolean(statusMenuAnchor)}
+                onClose={() => setStatusMenuAnchor(null)}
+                PaperProps={{
+                  style: {
+                    maxHeight: 300,
+                    width: 200,
+                  },
+                }}
+              >
+                <MenuItem onClick={() => handleApprovalStatusFilterChange('pending_review')}>
+                  <Checkbox checked={approvalStatusFilter.includes('pending_review')} />
+                  <ListItemText primary="Pending Review" />
+                </MenuItem>
+                <MenuItem onClick={() => handleApprovalStatusFilterChange('approved')}>
+                  <Checkbox checked={approvalStatusFilter.includes('approved')} />
+                  <ListItemText primary="Approved" />
+                </MenuItem>
+                <MenuItem onClick={() => handleApprovalStatusFilterChange('rejected')}>
+                  <Checkbox checked={approvalStatusFilter.includes('rejected')} />
+                  <ListItemText primary="Rejected" />
+                </MenuItem>
+              </Menu>
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setApplicationMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {applicationNameFilter.length === 0 ? 'All Applications' : `${applicationNameFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
+              <Menu
+                anchorEl={applicationMenuAnchor}
+                open={Boolean(applicationMenuAnchor)}
+                onClose={() => setApplicationMenuAnchor(null)}
+                PaperProps={{
+                  style: {
+                    maxHeight: 300,
+                    width: 200,
+                  },
+                }}
+              >
+                {uniqueApplicationNames.map(appName => (
+                  <MenuItem key={appName} onClick={() => handleApplicationNameFilterChange(appName)}>
+                    <Checkbox checked={applicationNameFilter.includes(appName)} />
+                    <ListItemText primary={appName} />
+                  </MenuItem>
+                ))}
+              </Menu>
+            </Grid>
+            <Grid item xs={12} md={1.5}>
               <Button
                 fullWidth
                 variant="outlined"
                 startIcon={<FilterList />}
                 onClick={() => {
                   setSearchTerm('');
-                  setTypeFilter('');
-                  setCatalogFilter('');
-                  setApprovalStatusFilter('');
+                  setTypeFilter([]);
+                  setCatalogFilter([]);
+                  setApprovalStatusFilter([]);
+                  setApplicationNameFilter([]);
                   setCurrentPage(0);
                 }}
               >
@@ -828,7 +1555,7 @@ const AssetsPage = () => {
                   <TableCell sx={{ width: '60px', fontWeight: 600 }}>#</TableCell>
                   <TableCell>Name</TableCell>
                   <TableCell>Type</TableCell>
-                  <TableCell>Format</TableCell>
+                  <TableCell>File Size</TableCell>
                   <TableCell>Catalog</TableCell>
                   <TableCell>Data Source</TableCell>
                   <TableCell>Discovered</TableCell>
@@ -858,7 +1585,10 @@ const AssetsPage = () => {
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" sx={{ fontFamily: 'Roboto', fontSize: '0.875rem' }}>
-                        {asset.technical_metadata?.format || asset.technical_metadata?.content_type || 'Unknown'}
+                        {(() => {
+                          const sizeBytes = asset.technical_metadata?.size_bytes || asset.technical_metadata?.size || 0;
+                          return formatBytes(sizeBytes);
+                        })()}
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -941,12 +1671,19 @@ const AssetsPage = () => {
                           </>
                         )}
                         {asset.operational_metadata?.approval_status === 'rejected' && (
-                          <Chip
-                            icon={<Close />}
-                            label="Rejected"
-                            color="error"
-                            size="small"
-                          />
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                            <Chip
+                              icon={<Close />}
+                              label="Rejected"
+                              color="error"
+                              size="small"
+                            />
+                            {asset.operational_metadata?.rejection_reason && (
+                              <Typography variant="caption" color="error" sx={{ fontSize: '0.7rem', fontStyle: 'italic', maxWidth: '250px', wordWrap: 'break-word' }}>
+                                Reason: {asset.operational_metadata.rejection_reason}
+                              </Typography>
+                            )}
+                          </Box>
                         )}
                         {asset.operational_metadata?.publish_status === 'published' && (
                           <Chip
@@ -1003,8 +1740,14 @@ const AssetsPage = () => {
       <Dialog
         open={detailsDialogOpen}
         onClose={handleCloseDialog}
-        maxWidth="lg"
+        maxWidth="xl"
         fullWidth
+        sx={{
+          '& .MuiDialog-paper': {
+            width: '95%',
+            maxWidth: '1400px',
+          }
+        }}
       >
         {!selectedAsset ? (
           <Box sx={{ p: 4, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', minHeight: 300, gap: 2 }}>
@@ -1289,11 +2032,40 @@ const AssetsPage = () => {
                     const safeStatus = operationalMetadata.status || 'active';
                     const safeOwner = typeof operationalMetadata.owner === 'object' && operationalMetadata.owner?.roleName 
                       ? operationalMetadata.owner.roleName 
-                      : operationalMetadata.owner || 'account_admin';
+                      : operationalMetadata.owner || 'workspace_owner@hdfc.bank.in';
                     const safeLastModified = operationalMetadata.last_modified || operationalMetadata.last_updated_at || selectedAsset?.discovered_at || new Date().toISOString();
                     const safeLastAccessed = operationalMetadata.last_accessed || operationalMetadata.last_updated_at || new Date().toISOString();
                     const safeAccessCount = operationalMetadata.access_count || operationalMetadata.access_level || 'internal';
-                    const safeDataQualityScore = operationalMetadata.data_quality_score || 95;
+                    // Derive data source type from connector_id or use stored value
+                    let safeDataSourceType = selectedAsset?.data_source_type || operationalMetadata.data_source_type;
+                    if (!safeDataSourceType || safeDataSourceType === 'N/A') {
+                      const connectorId = selectedAsset?.connector_id || operationalMetadata.connector_id || '';
+                      if (connectorId.startsWith('azure_blob_')) {
+                        safeDataSourceType = 'Azure Blob Storage';
+                      } else if (connectorId.startsWith('adls_gen2_') || connectorId.includes('datalake')) {
+                        safeDataSourceType = 'ADLS Gen2';
+                      } else if (connectorId) {
+                        // Extract connector type from connector_id format: "type_name"
+                        const parts = connectorId.split('_');
+                        if (parts.length > 0) {
+                          const connectorType = parts[0];
+                          safeDataSourceType = connectorType.charAt(0).toUpperCase() + connectorType.slice(1).replace('_', ' ');
+                        } else {
+                          safeDataSourceType = connectorId;
+                        }
+                      } else {
+                        safeDataSourceType = 'N/A';
+                      }
+                    } else {
+                      // Format the stored data_source_type for better display
+                      if (safeDataSourceType.toLowerCase().includes('azure') && safeDataSourceType.toLowerCase().includes('blob')) {
+                        safeDataSourceType = 'Azure Blob Storage';
+                      } else if (safeDataSourceType.toLowerCase().includes('adls') || safeDataSourceType.toLowerCase().includes('datalake')) {
+                        safeDataSourceType = 'ADLS Gen2';
+                      }
+                    }
+                    const safeConnectorId = selectedAsset?.connector_id || operationalMetadata.connector_id || 'N/A';
+                    const safeCatalog = selectedAsset?.catalog || operationalMetadata.catalog || 'N/A';
                     
                     return (
                       <Grid container spacing={2}>
@@ -1363,10 +2135,34 @@ const AssetsPage = () => {
                           <Card variant="outlined">
                             <CardContent>
                               <Typography color="text.secondary" gutterBottom>
-                                Data Quality Score
+                                Data Source Type
                               </Typography>
                               <Typography variant="body1">
-                                {safeDataQualityScore}%
+                                {safeDataSourceType}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Connector ID
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeConnectorId}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Catalog
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeCatalog}
                               </Typography>
                             </CardContent>
                           </Card>
@@ -1387,23 +2183,116 @@ const AssetsPage = () => {
                     
                     const businessMetadata = selectedAsset?.business_metadata || {};
                     const safeDescription = businessMetadata.description || selectedAsset?.description || 'No description available';
-                    const safeBusinessOwner = businessMetadata.business_owner || 'Unknown';
+                    const safeBusinessOwner = businessMetadata.business_owner || 'workspace_owner@hdfc.bank.in';
                     const safeDepartment = businessMetadata.department || 'N/A';
                     const safeClassification = businessMetadata.classification || 'internal';
                     const safeSensitivityLevel = businessMetadata.sensitivity_level || 'medium';
-                    const safeTags = businessMetadata.tags || [];
+                    // Filter tags: remove empty, whitespace-only, and "torrocon" tags
+                    const allTags = businessMetadata.tags || [];
+                    const filteredTags = allTags
+                      .filter(tag => tag && typeof tag === 'string' && tag.trim() !== '' && tag.toLowerCase() !== 'torrocon')
+                      .map(tag => {
+                        // Shorten rejection tags if needed
+                        if (tag.startsWith('REJECTED:')) {
+                          const reasonPart = tag.substring('REJECTED:'.length).trim();
+                          const shortReason = GOVERNANCE_REJECTION_REASONS.find(r => reasonPart.startsWith(`${r.code} -`))?.shortTag ||
+                                             reasonPart.split(' ').slice(0, 2).join(' ') ||
+                                             'Rejected';
+                          return `REJECTED: ${shortReason}`;
+                        }
+                        return tag;
+                      });
                     
                     return (
                       <Grid container spacing={2}>
                         <Grid item xs={12}>
                           <Card variant="outlined">
                             <CardContent>
-                              <Typography color="text.secondary" gutterBottom>
-                                Description
-                              </Typography>
-                              <Typography variant="body1">
-                                {safeDescription}
-                              </Typography>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                <Typography color="text.secondary" gutterBottom sx={{ mb: 0 }}>
+                                  Description
+                                </Typography>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  startIcon={<Add />}
+                                  onClick={() => setTagDialogOpen(true)}
+                                  sx={{ 
+                                    minWidth: '100px',
+                                    maxWidth: '100px',
+                                    width: '100px',
+                                    padding: '2px 8px',
+                                    fontSize: '0.7rem',
+                                    ml: 'auto',
+                                    height: '24px',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                >
+                                  Add Tag
+                                </Button>
+                              </Box>
+                              {selectedTags.length > 0 ? (
+                                <Box sx={{ 
+                                  minHeight: '80px',
+                                  p: 1.5,
+                                  border: '1px solid',
+                                  borderColor: 'divider',
+                                  borderRadius: 1,
+                                  bgcolor: 'background.paper'
+                                }}>
+                                  <Stack direction="column" spacing={1}>
+                                    {selectedTags.map((tag) => (
+                                      <Box key={tag.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                                        <Chip
+                                          label={
+                                            <Box>
+                                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                                {tag.tag_name}
+                                              </Typography>
+                                              {tag.description && (
+                                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                                  {tag.description}
+                                                </Typography>
+                                              )}
+                                            </Box>
+                                          }
+                                          onDelete={() => handleRemoveTag(tag.id)}
+                                          deleteIcon={<Close fontSize="small" />}
+                                          color="primary"
+                                          variant="outlined"
+                                          sx={{ 
+                                            height: 'auto',
+                                            py: 0.5,
+                                            '& .MuiChip-label': {
+                                              display: 'block',
+                                              whiteSpace: 'normal',
+                                              py: 0.5
+                                            }
+                                          }}
+                                        />
+                                      </Box>
+                                    ))}
+                                  </Stack>
+                                </Box>
+                              ) : (
+                                <TextField
+                                  fullWidth
+                                  multiline
+                                  rows={3}
+                                  value={description || defaultDescription}
+                                  InputProps={{
+                                    readOnly: true,
+                                  }}
+                                  placeholder="Azure Blob Storage file: schema_20_file_099.parquet"
+                                  variant="outlined"
+                                  size="small"
+                                  sx={{
+                                    '& .MuiInputBase-input': {
+                                      cursor: 'default',
+                                    }
+                                  }}
+                                />
+                              )}
                             </CardContent>
                           </Card>
                         </Grid>
@@ -1425,9 +2314,19 @@ const AssetsPage = () => {
                               <Typography color="text.secondary" gutterBottom>
                                 Department
                               </Typography>
-                              <Typography variant="body1">
-                                {safeDepartment}
-                              </Typography>
+                              <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                                <Select
+                                  value={department}
+                                  onChange={(e) => setDepartment(e.target.value)}
+                                  displayEmpty
+                                >
+                                  {DEPARTMENTS.map((dept) => (
+                                    <MenuItem key={dept} value={dept}>
+                                      {dept}
+                                    </MenuItem>
+                                  ))}
+                                </Select>
+                              </FormControl>
                             </CardContent>
                           </Card>
                         </Grid>
@@ -1481,9 +2380,21 @@ const AssetsPage = () => {
                                 Table Tags
                               </Typography>
                               <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                                  No table tags
-                                </Typography>
+                                {filteredTags.length > 0 ? (
+                                  filteredTags.map((tag, index) => (
+                                    <Chip
+                                      key={index}
+                                      label={tag}
+                                      size="small"
+                                      color={tag.startsWith('REJECTED:') ? 'error' : 'default'}
+                                      variant={tag.startsWith('REJECTED:') ? 'filled' : 'outlined'}
+                                    />
+                                  ))
+                                ) : (
+                                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                    No table tags
+                                  </Typography>
+                                )}
                               </Box>
                             </CardContent>
                           </Card>
@@ -1518,6 +2429,16 @@ const AssetsPage = () => {
                     
                     const columns = selectedAsset?.columns || [];
                     const piiColumns = columns.filter(col => col.pii_detected);
+                    // Check if any column has PII or is being changed from Non-PII to PII
+                    const hasPiiOrChanging = columns.some(col => {
+                      const isPii = col.pii_detected || false;
+                      // Check if this column is being changed from Non-PII to PII in the dialog
+                      const isChangingToPii = piiDialogOpen && 
+                                             selectedColumnForPii?.name === col.name && 
+                                             piiDialogIsPii && 
+                                             (originalPiiStatus[col.name] === false || !col.pii_detected);
+                      return isPii || isChangingToPii;
+                    });
                     
                     if (columns.length > 0) {
                       return (
@@ -1536,46 +2457,252 @@ const AssetsPage = () => {
                                   <TableCell>Nullable</TableCell>
                                   <TableCell>Description</TableCell>
                                   <TableCell>PII Status</TableCell>
+                                  {hasPiiOrChanging && (
+                                    <>
+                                      <TableCell>Masking logic (Analytical User)</TableCell>
+                                      <TableCell>Masking logic (Operational User)</TableCell>
+                                    </>
+                                  )}
                                 </TableRow>
                               </TableHead>
                               <TableBody>
-                                {columns.map((column, index) => (
-                                  <TableRow key={index}>
-                                    <TableCell>
-                                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                        {column.name || 'Unknown'}
-                                      </Typography>
-                                    </TableCell>
-                                    <TableCell>
-                                      <Chip label={column.type || 'Unknown'} size="small" variant="outlined" />
-                                    </TableCell>
-                                    <TableCell>
-                                      {column.nullable ? 'Yes' : 'No'}
-                                    </TableCell>
-                                    <TableCell>
-                                      <Typography variant="body2" color="text.secondary">
-                                        {column.description || 'No description'}
-                                      </Typography>
-                                    </TableCell>
-                                    <TableCell>
-                                      {column.pii_detected ? (
-                                        <Chip 
-                                          icon={<Warning />}
-                                          label={`PII: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`} 
-                                          color="error" 
-                                          size="small"
-                                        />
-                                      ) : (
-                                        <Chip 
-                                          icon={<CheckCircle />}
-                                          label="No PII" 
-                                          color="success" 
-                                          size="small"
-                                        />
-                                      )}
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
+                                {columns.map((column, index) => {
+                                  const isEditing = editingColumn === column.name;
+                                  const editData = columnEditData[column.name] || {};
+                                  
+                                  const handleStartEdit = () => {
+                                    setEditingColumn(column.name);
+                                    setColumnEditData({
+                                      ...columnEditData,
+                                      [column.name]: {}
+                                    });
+                                  };
+                                  
+                                  const handleCancelEdit = () => {
+                                    setEditingColumn(null);
+                                    const newEditData = { ...columnEditData };
+                                    delete newEditData[column.name];
+                                    setColumnEditData(newEditData);
+                                  };
+                                  
+                                  const handleSaveColumn = async () => {
+                                    if (!selectedAsset) return;
+                                    setSavingColumn(true);
+                                    try {
+                                      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                      const updatedColumns = selectedAsset.columns.map(col => 
+                                        col.name === column.name 
+                                          ? {
+                                              ...col
+                                            }
+                                          : col
+                                      );
+                                      
+                                      const response = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ columns: updatedColumns })
+                                      });
+                                      
+                                      if (response.ok) {
+                                        const updatedAsset = await response.json();
+                                        setSelectedAsset(updatedAsset);
+                                        setEditingColumn(null);
+                                        const newEditData = { ...columnEditData };
+                                        delete newEditData[column.name];
+                                        setColumnEditData(newEditData);
+                                        await fetchAssets(); // Refresh the assets list
+                                      }
+                                    } catch (error) {
+                                      console.error('Error saving column:', error);
+                                      alert('Failed to save column changes');
+                                    } finally {
+                                      setSavingColumn(false);
+                                    }
+                                  };
+                                  
+                                  const handleFieldChange = (field, value) => {
+                                    setColumnEditData({
+                                      ...columnEditData,
+                                      [column.name]: {
+                                        ...editData,
+                                        [field]: value
+                                      }
+                                    });
+                                  };
+                                  
+                                  return (
+                                    <TableRow key={index}>
+                                      <TableCell>
+                                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                          {column.name || 'Unknown'}
+                                        </Typography>
+                                      </TableCell>
+                                      <TableCell>
+                                        <Chip label={column.type || 'Unknown'} size="small" variant="outlined" />
+                                      </TableCell>
+                                      <TableCell>
+                                        {column.nullable ? 'Yes' : 'No'}
+                                      </TableCell>
+                                      <TableCell>
+                                        <Typography variant="body2" color="text.secondary">
+                                          {column.description || 'No description'}
+                                        </Typography>
+                                      </TableCell>
+                                      <TableCell>
+                                        {column.pii_detected ? (
+                                          <Chip 
+                                            icon={<Warning />}
+                                            label={`PII: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`} 
+                                            color="error" 
+                                            size="small"
+                                            sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
+                                            onClick={() => handleOpenPiiDialog(column)}
+                                          />
+                                        ) : (
+                                          <Chip 
+                                            icon={<CheckCircle />}
+                                            label="No PII" 
+                                            color="success" 
+                                            size="small"
+                                            sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
+                                            onClick={() => handleOpenPiiDialog(column)}
+                                          />
+                                        )}
+                                      </TableCell>
+                                      {hasPiiOrChanging && (() => {
+                                        const isPii = column.pii_detected || false;
+                                        // Check if this column is being changed from Non-PII to PII in the dialog
+                                        const isChangingToPii = piiDialogOpen && 
+                                                               selectedColumnForPii?.name === column.name && 
+                                                               piiDialogIsPii && 
+                                                               (originalPiiStatus[column.name] === false || !column.pii_detected);
+                                        const showMasking = isPii || isChangingToPii;
+                                        const maskingLogic = columnMaskingLogic[column.name] || {
+                                          analytical: column.masking_logic_analytical || '',
+                                          operational: column.masking_logic_operational || ''
+                                        };
+                                        
+                                        if (!showMasking) {
+                                          return (
+                                            <>
+                                              <TableCell></TableCell>
+                                              <TableCell></TableCell>
+                                            </>
+                                          );
+                                        }
+                                        
+                                        // Get PII types - use dialog types if column is being changed to PII
+                                        const currentPiiTypes = (isChangingToPii && piiDialogOpen && selectedColumnForPii?.name === column.name) 
+                                          ? piiDialogTypes 
+                                          : (column.pii_types || []);
+                                        
+                                        // Get masking options based on PII types
+                                        const analyticalOptions = getMaskingOptions({ pii_types: currentPiiTypes }, 'analytical');
+                                        const operationalOptions = getMaskingOptions({ pii_types: currentPiiTypes }, 'operational');
+                                        
+                                        // Check if there are unsaved changes
+                                        const hasUnsavedChanges = unsavedMaskingChanges[column.name] || false;
+                                        const isSaving = savingMaskingLogic[column.name] || false;
+                                        
+                                        return (
+                                          <>
+                                            <TableCell>
+                                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                                <FormControl size="small" fullWidth>
+                                                  <Select
+                                                    value={maskingLogic.analytical || ''}
+                                                    onChange={(e) => {
+                                                      setColumnMaskingLogic(prev => ({
+                                                        ...prev,
+                                                        [column.name]: {
+                                                          ...maskingLogic,
+                                                          analytical: e.target.value
+                                                        }
+                                                      }));
+                                                      // Mark as having unsaved changes
+                                                      setUnsavedMaskingChanges(prev => ({
+                                                        ...prev,
+                                                        [column.name]: true
+                                                      }));
+                                                    }}
+                                                    displayEmpty
+                                                    sx={{ minWidth: 200 }}
+                                                  >
+                                                    <MenuItem value="">
+                                                      <em>Select masking logic</em>
+                                                    </MenuItem>
+                                                    {analyticalOptions.map((option) => (
+                                                      <MenuItem key={option.value} value={option.value}>
+                                                        {option.label}
+                                                      </MenuItem>
+                                                    ))}
+                                                  </Select>
+                                                </FormControl>
+                                                {hasUnsavedChanges && (
+                                                  <IconButton
+                                                    size="small"
+                                                    color="primary"
+                                                    onClick={() => handleSaveMaskingLogic(column.name)}
+                                                    disabled={isSaving}
+                                                    sx={{ flexShrink: 0 }}
+                                                  >
+                                                    {isSaving ? <CircularProgress size={20} /> : <Save fontSize="small" />}
+                                                  </IconButton>
+                                                )}
+                                              </Box>
+                                            </TableCell>
+                                            <TableCell>
+                                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                                <FormControl size="small" fullWidth>
+                                                  <Select
+                                                    value={maskingLogic.operational || ''}
+                                                    onChange={(e) => {
+                                                      setColumnMaskingLogic(prev => ({
+                                                        ...prev,
+                                                        [column.name]: {
+                                                          ...maskingLogic,
+                                                          operational: e.target.value
+                                                        }
+                                                      }));
+                                                      // Mark as having unsaved changes
+                                                      setUnsavedMaskingChanges(prev => ({
+                                                        ...prev,
+                                                        [column.name]: true
+                                                      }));
+                                                    }}
+                                                    displayEmpty
+                                                    sx={{ minWidth: 200 }}
+                                                  >
+                                                    <MenuItem value="">
+                                                      <em>Select masking logic</em>
+                                                    </MenuItem>
+                                                    {operationalOptions.map((option) => (
+                                                      <MenuItem key={option.value} value={option.value}>
+                                                        {option.label}
+                                                      </MenuItem>
+                                                    ))}
+                                                  </Select>
+                                                </FormControl>
+                                                {hasUnsavedChanges && (
+                                                  <IconButton
+                                                    size="small"
+                                                    color="primary"
+                                                    onClick={() => handleSaveMaskingLogic(column.name)}
+                                                    disabled={isSaving}
+                                                    sx={{ flexShrink: 0 }}
+                                                  >
+                                                    {isSaving ? <CircularProgress size={20} /> : <Save fontSize="small" />}
+                                                  </IconButton>
+                                                )}
+                                              </Box>
+                                            </TableCell>
+                                          </>
+                                        );
+                                      })()}
+                                    </TableRow>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
                           </TableContainer>
@@ -1594,7 +2721,7 @@ const AssetsPage = () => {
             </DialogContent>
             <DialogActions>
               {}
-              {(activeTab === 2 || classification !== originalClassification || sensitivityLevel !== originalSensitivityLevel) && (
+              {(activeTab === 2 || classification !== originalClassification || sensitivityLevel !== originalSensitivityLevel || department !== originalDepartment || description !== originalDescription) && (
                 <>
                   <Button 
                     onClick={handleCloseDialog} 
@@ -1623,28 +2750,59 @@ const AssetsPage = () => {
       </Dialog>
 
       {}
-      <Dialog open={rejectDialogOpen} onClose={() => setRejectDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={rejectDialogOpen} onClose={() => {
+        setRejectDialogOpen(false);
+        setSelectedRejectReason('');
+        setCustomRejectReason('');
+        setRejectReason('');
+        setAssetToReject(null);
+      }} maxWidth="sm" fullWidth>
         <DialogTitle>Reject Asset</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 2 }}>
-            Please provide a reason for rejecting this asset:
+            Please select a governance reason for rejecting this asset:
           </Typography>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="Rejection Reason"
-            fullWidth
-            multiline
-            rows={4}
-            variant="outlined"
-            value={rejectReason}
-            onChange={(e) => setRejectReason(e.target.value)}
-            placeholder="Enter the reason for rejection..."
-          />
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel>Rejection Reason</InputLabel>
+            <Select
+              value={selectedRejectReason}
+              onChange={(e) => {
+                setSelectedRejectReason(e.target.value);
+                if (e.target.value !== '011') {
+                  setCustomRejectReason('');
+                }
+              }}
+              label="Rejection Reason"
+            >
+              {GOVERNANCE_REJECTION_REASONS.map((reason) => (
+                <MenuItem key={reason.code} value={reason.code}>
+                  {reason.code} - {reason.reason}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          
+          {selectedRejectReason === '011' && (
+            <TextField
+              autoFocus
+              margin="dense"
+              label="Custom Rejection Reason"
+              fullWidth
+              multiline
+              rows={4}
+              variant="outlined"
+              value={customRejectReason}
+              onChange={(e) => setCustomRejectReason(e.target.value)}
+              placeholder="Please provide a detailed reason for rejection..."
+              sx={{ mt: 1 }}
+            />
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => {
             setRejectDialogOpen(false);
+            setSelectedRejectReason('');
+            setCustomRejectReason('');
             setRejectReason('');
             setAssetToReject(null);
           }}>
@@ -1654,9 +2812,220 @@ const AssetsPage = () => {
             onClick={handleRejectConfirm} 
             variant="contained" 
             color="error"
-            disabled={!rejectReason.trim()}
+            disabled={!selectedRejectReason || (selectedRejectReason === '011' && !customRejectReason.trim())}
           >
             Reject
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {}
+      <Dialog open={tagDialogOpen} onClose={() => {
+        setTagDialogOpen(false);
+        setSelectedTag('');
+      }} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Business Glossary Tag</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Select a tag from the business glossary to add to the description:
+          </Typography>
+          {loadingTags ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <FormControl fullWidth sx={{ mt: 1 }}>
+              <InputLabel id="tag-select-label" shrink={true}>Select Glossary Tag</InputLabel>
+              <Select
+                labelId="tag-select-label"
+                value={selectedTag}
+                onChange={(e) => setSelectedTag(e.target.value)}
+                label="Select Glossary Tag"
+                displayEmpty
+                renderValue={(value) => {
+                  if (!value) {
+                    return <span style={{ color: '#999' }}>Select a tag...</span>;
+                  }
+                  const tag = availableTags.find(t => t.id.toString() === value);
+                  return tag ? tag.tag_name : '';
+                }}
+                sx={{
+                  '& .MuiSelect-select': {
+                    display: 'flex',
+                    alignItems: 'center'
+                  }
+                }}
+              >
+                {availableTags.map((tag) => (
+                  <MenuItem key={tag.id} value={tag.id.toString()}>
+                    <Box sx={{ width: '100%' }}>
+                      <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                        {tag.tag_name}
+                      </Typography>
+                      {tag.description && (
+                        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+                          {tag.description}
+                        </Typography>
+                      )}
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+          {availableTags.length === 0 && !loadingTags && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: 'italic' }}>
+              No tags available. Tags need to be created in the metadata_tags table first.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            setTagDialogOpen(false);
+            setSelectedTag('');
+          }}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleAddTagToDescription} 
+            variant="contained" 
+            color="primary"
+            disabled={!selectedTag || loadingTags}
+          >
+            Add Tag
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {}
+      <Dialog open={piiDialogOpen} onClose={handleClosePiiDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Change PII Status for Column: {selectedColumnForPii?.name}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <FormControl component="fieldset">
+              <FormLabel component="legend" sx={{ mb: 1, fontWeight: 600 }}>PII Status</FormLabel>
+              <RadioGroup
+                value={piiDialogIsPii ? 'yes' : 'no'}
+                onChange={(e) => {
+                  const isPii = e.target.value === 'yes';
+                  setPiiDialogIsPii(isPii);
+                  if (!isPii) {
+                    setPiiDialogTypes([]);
+                  }
+                }}
+              >
+                <FormControlLabel 
+                  value="yes" 
+                  control={<Radio />} 
+                  label="Mark as PII" 
+                />
+                <FormControlLabel 
+                  value="no" 
+                  control={<Radio />} 
+                  label="Mark as Non-PII" 
+                />
+              </RadioGroup>
+            </FormControl>
+
+            {piiDialogIsPii && (
+              <FormControl component="fieldset">
+                <FormLabel component="legend" sx={{ mb: 1, fontWeight: 600 }}>
+                  PII Types (Select all that apply)
+                </FormLabel>
+                <FormGroup>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, maxHeight: '300px', overflowY: 'auto', p: 1, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                    {PII_TYPES.map((type) => (
+                      <FormControlLabel
+                        key={type}
+                        control={
+                          <Checkbox
+                            checked={piiDialogTypes.includes(type)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setPiiDialogTypes([...piiDialogTypes, type]);
+                              } else {
+                                setPiiDialogTypes(piiDialogTypes.filter(t => t !== type));
+                              }
+                            }}
+                          />
+                        }
+                        label={type}
+                      />
+                    ))}
+                    {/* Custom PII Types */}
+                    {piiDialogTypes.filter(t => !PII_TYPES.includes(t)).map((type) => (
+                      <FormControlLabel
+                        key={type}
+                        control={
+                          <Checkbox
+                            checked={true}
+                            onChange={(e) => {
+                              if (!e.target.checked) {
+                                setPiiDialogTypes(piiDialogTypes.filter(t => t !== type));
+                              }
+                            }}
+                          />
+                        }
+                        label={
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography variant="body2">{type}</Typography>
+                            <Chip label="Custom" size="small" color="primary" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />
+                          </Box>
+                        }
+                      />
+                    ))}
+                  </Box>
+                  
+                  {/* Add Custom PII Type */}
+                  <Box sx={{ mt: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      placeholder="Enter custom PII type..."
+                      value={customPiiType}
+                      onChange={(e) => setCustomPiiType(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCustomPiiType();
+                        }
+                      }}
+                      sx={{ flex: 1 }}
+                    />
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<Add />}
+                      onClick={handleAddCustomPiiType}
+                      disabled={!customPiiType.trim() || piiDialogTypes.includes(customPiiType.trim()) || PII_TYPES.includes(customPiiType.trim())}
+                    >
+                      Add
+                    </Button>
+                  </Box>
+                  
+                  {piiDialogTypes.length === 0 && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontStyle: 'italic' }}>
+                      Please select at least one PII type or add a custom type
+                    </Typography>
+                  )}
+                </FormGroup>
+              </FormControl>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleClosePiiDialog} disabled={savingPii}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleSavePii} 
+            variant="contained" 
+            color="primary"
+            disabled={savingPii || (piiDialogIsPii && piiDialogTypes.length === 0)}
+            startIcon={savingPii ? <CircularProgress size={20} /> : null}
+          >
+            {savingPii ? 'Saving...' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1739,6 +3108,32 @@ const AssetsPage = () => {
         </DialogActions>
       </Dialog>
 
+      {/* Full-screen loader for publishing */}
+      {publishing && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <CircularProgress size={60} sx={{ color: '#fff', mb: 2 }} />
+          <Typography variant="h6" sx={{ color: '#fff', fontWeight: 500 }}>
+            Publishing asset...
+          </Typography>
+          <Typography variant="body2" sx={{ color: '#fff', mt: 1, opacity: 0.8 }}>
+            Please wait while we redirect you
+          </Typography>
+        </Box>
+      )}
     </Box>
   );
 };

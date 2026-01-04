@@ -128,12 +128,10 @@ def discover_azure_blobs(**context):
     
     all_new_discoveries = []
     
-
     try:
         db_connections = get_azure_connections_from_db()
     except Exception as e:
         logger.error('FN:discover_azure_blobs error_getting_connections:{}'.format(str(e)))
-
         db_connections = []
         logger.warning('FN:discover_azure_blobs falling_back_to_env_vars')
     
@@ -418,22 +416,70 @@ def discover_azure_blobs(**context):
                                                                 columns = %s,
                                                                 operational_metadata = %s
                                                             WHERE id = %s
-                                                        INSERT INTO assets (
-                                                            id, name, type, catalog, connector_id, discovered_at,
-                                                            technical_metadata, operational_metadata, business_metadata, columns
-                                                        ) VALUES (
-                                                            %s, %s, %s, %s, %s, NOW(),
-                                                            %s, %s, %s, %s
-                                                        )
-                                            INSERT INTO assets (name, type, catalog, connector_id, storage_location, columns, business_metadata, technical_metadata, created_at, updated_at)
-                                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                                            INSERT INTO data_discovery (asset_id, storage_location, file_metadata, schema_json, schema_hash, status, approval_status, discovered_at, folder_path, data_source_type, environment, discovery_info)
-                                            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
-                                    INSERT INTO assets (name, type, catalog, connector_id, storage_location, columns, business_metadata, technical_metadata, created_at, updated_at)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                                    INSERT INTO data_discovery (asset_id, storage_location, file_metadata, schema_json, schema_hash, status, approval_status, discovered_at, folder_path, data_source_type, environment, discovery_info)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
-                                    INSERT INTO assets (name, type, catalog, connector_id, storage_location, columns, business_metadata, technical_metadata, created_at, updated_at)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                                    INSERT INTO data_discovery (asset_id, storage_location, file_metadata, schema_json, schema_hash, status, approval_status, discovered_at, folder_path, data_source_type, environment, discovery_info)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                                                        """
+                                                    else:
+                                                        insert_sql = """
+                                                            INSERT INTO assets (
+                                                                id, name, type, catalog, connector_id, discovered_at,
+                                                                technical_metadata, operational_metadata, business_metadata, columns
+                                                            ) VALUES (
+                                                                %s, %s, %s, %s, %s, NOW(),
+                                                                %s, %s, %s, %s
+                                                            )
+                                                        """
+                                                    # SQL execution would be implemented here
+                                                    pass
+                                                else:
+                                                    # Insert logic would be implemented here  
+                                                    pass
+                                            # Additional processing continues here
+                                        except Exception as e:
+                                            logger.error(f'Error in _execute_db_write: {e}')
+                                        finally:
+                                            if conn:
+                                                conn.close()
+                                    _execute_db_write()
+                                    # Additional processing would continue here
+                                except Exception as e:
+                                    logger.error(f'Error processing blob: {e}')
+                                    continue
+                            # End of batch processing
+                        # End of batch loop
+                    # End of container processing
+                    except Exception as e:
+                        logger.error(f'Error processing folder: {e}')
+                        continue
+                # End of containers loop
+        except Exception as e:
+            logger.error(f'Error processing connection: {e}')
+            continue
+    # End of connections loop
+    
+    logger.info('FN:discover_azure_blobs discovery_complete')
+    return all_new_discoveries
+
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+dag = DAG(
+    'azure_blob_discovery_dag',
+    default_args=default_args,
+    description='Discover Azure Blob Storage assets',
+    schedule_interval=timedelta(hours=6),
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    tags=['discovery', 'azure', 'blob'],
+)
+
+discover_task = PythonOperator(
+    task_id='discover_azure_blobs',
+    python_callable=discover_azure_blobs,
+    dag=dag,
+)
