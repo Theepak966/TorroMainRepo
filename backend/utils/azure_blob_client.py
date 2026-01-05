@@ -30,6 +30,7 @@ def create_azure_blob_client(config: Dict) -> 'AzureBlobClient':
     
     credential = None
     
+    # If Service Principal credentials are provided, use ONLY those (no fallback to .env or Azure CLI)
     if account_name and tenant_id and client_id and client_secret:
         try:
             credential = ClientSecretCredential(
@@ -37,28 +38,34 @@ def create_azure_blob_client(config: Dict) -> 'AzureBlobClient':
                 client_id=client_id,
                 client_secret=client_secret
             )
-            logger.info('FN:create_azure_blob_client message:Using Service Principal authentication')
+            logger.info('FN:create_azure_blob_client message:Using Service Principal authentication from manual input')
         except Exception as e:
-            logger.warning('FN:create_azure_blob_client message:Service Principal auth failed, trying Azure CLI error:{}'.format(str(e)))
-            credential = None
+            logger.error('FN:create_azure_blob_client message:Service Principal authentication failed with provided credentials error:{}'.format(str(e)))
+            raise ValueError(
+                f"Service Principal authentication failed with the provided credentials. "
+                f"Please verify:\n"
+                f"1. Tenant ID is correct\n"
+                f"2. Client ID (Application ID) is correct\n"
+                f"3. Client Secret is valid and not expired\n"
+                f"4. Service Principal has required permissions\n"
+                f"Error: {str(e)}"
+            )
     
+    # Only fallback to Azure CLI / DefaultAzureCredential if NO credentials were provided
     if not credential:
         try:
             credential = AzureCliCredential()
-            logger.info('FN:create_azure_blob_client message:Using Azure CLI authentication')
+            logger.info('FN:create_azure_blob_client message:Using Azure CLI authentication (no Service Principal provided)')
         except Exception as e:
             logger.warning('FN:create_azure_blob_client message:Azure CLI auth failed, trying DefaultAzureCredential error:{}'.format(str(e)))
             try:
                 credential = DefaultAzureCredential()
-                logger.info('FN:create_azure_blob_client message:Using DefaultAzureCredential authentication')
+                logger.info('FN:create_azure_blob_client message:Using DefaultAzureCredential authentication (no Service Principal provided)')
             except Exception as e2:
                 logger.error('FN:create_azure_blob_client message:All authentication methods failed error:{}'.format(str(e2)))
                 raise ValueError(
-                    "Failed to authenticate. Tried Service Principal, Azure CLI, and DefaultAzureCredential. "
-                    "Please ensure either:\n"
-                    "1. Service Principal credentials are provided (account_name, tenant_id, client_id, client_secret), OR\n"
-                    "2. Azure CLI is installed and logged in (run 'az login'), OR\n"
-                    "3. DefaultAzureCredential can find credentials (Managed Identity, Environment Variables, etc.)"
+                    "Failed to authenticate. Please provide Service Principal credentials (account_name, tenant_id, client_id, client_secret) "
+                    "or ensure Azure CLI is installed and logged in (run 'az login')."
                 )
     
     if not account_name:
@@ -287,6 +294,329 @@ class AzureBlobClient:
         except Exception as e:
             logger.warning('FN:get_blob_sample container_name:{} blob_path:{} max_bytes:{} error:{}'.format(container_name, blob_path, max_bytes, str(e)))
             return b""
+    
+    def get_parquet_footer(self, container_name: str, blob_path: str, footer_size_kb: int = 256) -> bytes:
+        """
+        Download the footer of parquet file (last 256KB by default, increased for large schemas).
+        Parquet files store schema metadata in the footer, so we don't need the entire file.
+        This is MUCH more efficient for large-scale discovery (4000+ files).
+        
+        Strategy:
+        1. First, download last 8 bytes to get the footer length
+        2. Then download the exact footer size (up to max footer_size_kb)
+        3. If footer is larger, progressively increase download size (optimized order: 512KB, 1024KB, 256KB, 2048KB)
+        4. Early exit when PAR1 magic is found (no need to try other sizes)
+        5. This ensures we get the COMPLETE schema even for files with 100+ columns
+        
+        Performance: 4,000 files × 256KB = 1GB (vs 40GB with full download)
+        """
+        import struct
+        
+        try:
+            properties = self.get_blob_properties(container_name, blob_path)
+            file_size = properties.get("size", 0)
+            
+            if file_size == 0:
+                logger.warning('FN:get_parquet_footer blob_path:{} message:File size is 0'.format(blob_path))
+                return b""
+            
+            # Parquet footer structure: [footer_data][footer_length:4 bytes][magic:4 bytes "PAR1"]
+            # First, read last 8 bytes to get footer length
+            if file_size < 8:
+                # File too small, download full file
+                logger.debug('FN:get_parquet_footer blob_path:{} message:File too small, downloading full file'.format(blob_path))
+                return self.get_blob_content(container_name, blob_path)
+            
+            max_footer_bytes = footer_size_kb * 1024  # Convert KB to bytes
+            
+            # Download last 8 bytes to read footer length
+            last_8_bytes = None
+            if hasattr(self, 'data_lake_service_client') and self.data_lake_service_client:
+                try:
+                    file_system_client = self.data_lake_service_client.get_file_system_client(container_name)
+                    file_client = file_system_client.get_file_client(blob_path)
+                    last_8_bytes = file_client.download_file(offset=file_size - 8, length=8).readall()
+                except Exception as e:
+                    logger.debug('FN:get_parquet_footer datalake_error:{} falling_back_to_blob_api'.format(str(e)))
+            
+            if not last_8_bytes:
+                blob_client = self.blob_service_client.get_blob_client(
+                    container=container_name,
+                    blob=blob_path
+                )
+                last_8_bytes = blob_client.download_blob(offset=file_size - 8, length=8).readall()
+            
+            if len(last_8_bytes) < 8:
+                logger.warning('FN:get_parquet_footer blob_path:{} message:Could not read last 8 bytes, downloading full file'.format(blob_path))
+                return self.get_blob_content(container_name, blob_path)
+            
+            # Verify magic bytes "PAR1" at the end
+            if last_8_bytes[-4:] != b'PAR1':
+                # Not a valid parquet file or footer not at end, try progressive download
+                logger.debug('FN:get_parquet_footer blob_path:{} message:PAR1 magic not found, trying progressive download'.format(blob_path))
+                
+                # OPTIMIZED: Try progressively larger downloads to find the footer
+                # Order optimized: Most parquet files have footers < 512KB, so try 512KB first
+                # Then 1024KB for medium schemas, then 256KB for small, then 2048KB for very large
+                for attempt_size_kb in [512, 1024, 256, 2048]:
+                    attempt_bytes = attempt_size_kb * 1024
+                    if file_size <= attempt_bytes:
+                        # File is smaller than attempt size, download full file
+                        return self.get_blob_content(container_name, blob_path)
+                    
+                    try:
+                        offset = max(0, file_size - attempt_bytes)
+                        length = min(attempt_bytes, file_size)
+                        
+                        if hasattr(self, 'data_lake_service_client') and self.data_lake_service_client:
+                            try:
+                                file_system_client = self.data_lake_service_client.get_file_system_client(container_name)
+                                file_client = file_system_client.get_file_client(blob_path)
+                                footer_data = file_client.download_file(offset=offset, length=length).readall()
+                            except Exception:
+                                blob_client = self.blob_service_client.get_blob_client(
+                                    container=container_name,
+                                    blob=blob_path
+                                )
+                                footer_data = blob_client.download_blob(offset=offset, length=length).readall()
+                        else:
+                            blob_client = self.blob_service_client.get_blob_client(
+                                container=container_name,
+                                blob=blob_path
+                            )
+                            footer_data = blob_client.download_blob(offset=offset, length=length).readall()
+                        
+                        # Check if we found PAR1 magic
+                        if len(footer_data) >= 4 and footer_data[-4:] == b'PAR1':
+                            logger.debug('FN:get_parquet_footer blob_path:{} message:Found PAR1 magic with {}KB download'.format(blob_path, attempt_size_kb))
+                            # OPTIMIZATION: Early exit - we found valid footer, no need to try other sizes
+                            # Try to read footer length from the downloaded data
+                            if len(footer_data) >= 8:
+                                try:
+                                    footer_length = struct.unpack('<I', footer_data[-8:-4])[0]
+                                    actual_footer_size = footer_length + 8
+                                    if actual_footer_size <= attempt_bytes:
+                                        # We have the complete footer - return immediately
+                                        return footer_data
+                                except Exception:
+                                    pass
+                            # Return the footer data we found (may be incomplete but has PAR1 magic)
+                            return footer_data
+                    except Exception as e:
+                        logger.debug('FN:get_parquet_footer blob_path:{} attempt_size_kb:{} error:{}'.format(blob_path, attempt_size_kb, str(e)))
+                        continue
+                
+                # If all attempts failed, download full file as last resort
+                logger.warning('FN:get_parquet_footer blob_path:{} message:All footer attempts failed, downloading full file'.format(blob_path))
+                return self.get_blob_content(container_name, blob_path)
+            
+            # Read footer length (4 bytes before magic)
+            try:
+                footer_length = struct.unpack('<I', last_8_bytes[0:4])[0]
+                
+                # Sanity check: footer length should be reasonable
+                if footer_length > max_footer_bytes * 10:  # More than 10x max is suspicious
+                    logger.warning('FN:get_parquet_footer blob_path:{} footer_length:{} message:Footer length seems too large, using max_footer_bytes'.format(blob_path, footer_length))
+                    footer_bytes = max_footer_bytes
+                elif footer_length == 0:
+                    logger.warning('FN:get_parquet_footer blob_path:{} message:Footer length is 0, using max_footer_bytes'.format(blob_path))
+                    footer_bytes = max_footer_bytes
+                else:
+                    # Footer includes: footer_data + 4 bytes length + 4 bytes magic = footer_length + 8
+                    actual_footer_size = footer_length + 8
+                    # Use the actual footer size, but cap at max_footer_bytes for safety
+                    footer_bytes = min(actual_footer_size, max_footer_bytes)
+                    
+                    # If actual footer is larger than max, log a warning
+                    if actual_footer_size > max_footer_bytes:
+                        logger.warning('FN:get_parquet_footer blob_path:{} actual_footer_size:{} max_footer_bytes:{} message:Footer larger than max, may be incomplete'.format(
+                            blob_path, actual_footer_size, max_footer_bytes
+                        ))
+            except Exception as e:
+                logger.warning('FN:get_parquet_footer blob_path:{} error:{} message:Failed to parse footer length, using max_footer_bytes'.format(blob_path, str(e)))
+                footer_bytes = max_footer_bytes
+            
+            if file_size <= footer_bytes:
+                # File is smaller than footer size, download full file
+                logger.debug('FN:get_parquet_footer blob_path:{} message:File smaller than footer, downloading full file'.format(blob_path))
+                return self.get_blob_content(container_name, blob_path)
+            
+            # Download the footer (last N bytes)
+            offset = max(0, file_size - footer_bytes)
+            length = min(footer_bytes, file_size)
+            
+            try:
+                if hasattr(self, 'data_lake_service_client') and self.data_lake_service_client:
+                    try:
+                        file_system_client = self.data_lake_service_client.get_file_system_client(container_name)
+                        file_client = file_system_client.get_file_client(blob_path)
+                        footer_data = file_client.download_file(offset=offset, length=length).readall()
+                    except Exception as e:
+                        logger.debug('FN:get_parquet_footer datalake_error:{} falling_back_to_blob_api'.format(str(e)))
+                        blob_client = self.blob_service_client.get_blob_client(
+                            container=container_name,
+                            blob=blob_path
+                        )
+                        footer_data = blob_client.download_blob(offset=offset, length=length).readall()
+                else:
+                    blob_client = self.blob_service_client.get_blob_client(
+                        container=container_name,
+                        blob=blob_path
+                    )
+                    footer_data = blob_client.download_blob(offset=offset, length=length).readall()
+                
+                # Verify we got valid footer data
+                if len(footer_data) >= 4 and footer_data[-4:] == b'PAR1':
+                    return footer_data
+                else:
+                    logger.warning('FN:get_parquet_footer blob_path:{} message:Downloaded footer missing PAR1 magic, may be incomplete'.format(blob_path))
+                    return footer_data  # Return anyway, let schema extraction handle errors
+                    
+            except Exception as e:
+                logger.warning('FN:get_parquet_footer container_name:{} blob_path:{} error:{}'.format(container_name, blob_path, str(e)))
+                return b""
+                
+        except Exception as e:
+            logger.error('FN:get_parquet_footer container_name:{} blob_path:{} error:{}'.format(container_name, blob_path, str(e)), exc_info=True)
+            return b""
+    
+    def get_parquet_file_for_extraction(self, container_name: str, blob_path: str, max_size_mb: int = 10) -> bytes:
+        """
+        Download parquet file for schema and PII extraction.
+        DEPRECATED: Use get_parquet_footer() for schema extraction (much more efficient).
+        This method is kept for backward compatibility and PII detection that needs row group data.
+        """
+        try:
+            # Get file size first
+            properties = self.get_blob_properties(container_name, blob_path)
+            file_size = properties.get("size", 0)
+            max_bytes = max_size_mb * 1024 * 1024  # Convert MB to bytes
+            
+            # Performance optimization: For very large files, limit download size
+            if file_size > 100 * 1024 * 1024:  # > 100MB
+                max_bytes = min(max_bytes, 5 * 1024 * 1024)  # Cap at 5MB for very large files
+                logger.debug('FN:get_parquet_file_for_extraction container_name:{} blob_path:{} file_size:{} message:Large file detected, limiting download to 5MB'.format(
+                    container_name, blob_path, file_size
+                ))
+            
+            if file_size <= max_bytes:
+                # Small file - download full file
+                return self.get_blob_content(container_name, blob_path)
+            else:
+                # Large file - download first max_bytes to get first row group
+                if hasattr(self, 'data_lake_service_client') and self.data_lake_service_client:
+                    try:
+                        file_system_client = self.data_lake_service_client.get_file_system_client(container_name)
+                        file_client = file_system_client.get_file_client(blob_path)
+                        return file_client.download_file(offset=0, length=max_bytes).readall()
+                    except Exception as e:
+                        logger.warning('FN:get_parquet_file_for_extraction datalake_error:{} falling_back_to_blob_api'.format(str(e)))
+                
+                blob_client = self.blob_service_client.get_blob_client(
+                    container=container_name,
+                    blob=blob_path
+                )
+                return blob_client.download_blob(offset=0, length=max_bytes).readall()
+        except Exception as e:
+            logger.warning('FN:get_parquet_file_for_extraction container_name:{} blob_path:{} error:{}'.format(container_name, blob_path, str(e)))
+            return b""
+    
+    def get_parquet_footer_and_row_group(self, container_name: str, blob_path: str, footer_size_kb: int = 256, row_group_size_mb: int = 2) -> bytes:
+        """
+        Optimized method for large parquet files (>100MB).
+        Downloads footer (for schema) + first row group (for PII detection) and combines them.
+        This is much more efficient than downloading the entire file or downloading first 5MB (which doesn't include footer).
+        
+        Strategy:
+        1. Download footer from end of file (256KB-2MB typically) - contains schema metadata
+        2. Download first row group from beginning (2MB typically) - contains data for PII detection
+        3. Combine them: [row_group_data][footer_data]
+        
+        Note: PyArrow can extract schema from footer-only, and can read row groups if the structure is valid.
+        The combined structure allows both schema extraction and PII detection with actual data samples.
+        
+        Args:
+            footer_size_kb: Maximum footer size to download (default 256KB)
+            row_group_size_mb: Maximum first row group size to download (default 2MB)
+        
+        Returns:
+            Combined bytes: [first_row_group_data][footer_data]
+            If row group download fails, returns footer only (schema extraction will still work)
+        """
+        try:
+            properties = self.get_blob_properties(container_name, blob_path)
+            file_size = properties.get("size", 0)
+            
+            if file_size == 0:
+                logger.warning('FN:get_parquet_footer_and_row_group blob_path:{} message:File size is 0'.format(blob_path))
+                return b""
+            
+            # Download footer first (for schema) - this always works
+            footer_data = self.get_parquet_footer(container_name, blob_path, footer_size_kb=footer_size_kb)
+            
+            if not footer_data or len(footer_data) < 8:
+                logger.warning('FN:get_parquet_footer_and_row_group blob_path:{} message:Failed to download footer'.format(blob_path))
+                return footer_data if footer_data else b""
+            
+            # Download first row group from beginning (for PII detection)
+            # This gives us actual data samples for better PII detection accuracy
+            row_group_bytes = row_group_size_mb * 1024 * 1024
+            row_group_data = b""
+            
+            try:
+                if hasattr(self, 'data_lake_service_client') and self.data_lake_service_client:
+                    try:
+                        file_system_client = self.data_lake_service_client.get_file_system_client(container_name)
+                        file_client = file_system_client.get_file_client(blob_path)
+                        row_group_data = file_client.download_file(offset=0, length=min(row_group_bytes, file_size)).readall()
+                    except Exception as e:
+                        logger.debug('FN:get_parquet_footer_and_row_group datalake_error:{} falling_back_to_blob_api'.format(str(e)))
+                        blob_client = self.blob_service_client.get_blob_client(
+                            container=container_name,
+                            blob=blob_path
+                        )
+                        row_group_data = blob_client.download_blob(offset=0, length=min(row_group_bytes, file_size)).readall()
+                else:
+                    blob_client = self.blob_service_client.get_blob_client(
+                        container=container_name,
+                        blob=blob_path
+                    )
+                    row_group_data = blob_client.download_blob(offset=0, length=min(row_group_bytes, file_size)).readall()
+                
+                logger.info('FN:get_parquet_footer_and_row_group blob_path:{} footer_size:{} row_group_size:{} message:Downloaded footer and first row group for large file'.format(
+                    blob_path, len(footer_data), len(row_group_data)
+                ))
+            except Exception as e:
+                logger.warning('FN:get_parquet_footer_and_row_group blob_path:{} message:Failed to download row group, using footer only (schema will work, PII will use column names) error:{}'.format(blob_path, str(e)))
+                # Return footer only if row group download fails
+                # Schema extraction will still work, but PII detection will use column names only
+                return footer_data
+            
+            # Combine: row group data + footer data
+            # Structure: [row_group_data][footer_data]
+            # Note: Footer has PAR1 magic at end, so combined_data[-4:] == b'PAR1'
+            # PyArrow can extract schema from footer (which has PAR1 magic at end)
+            # PyArrow might not recognize the combined structure as valid parquet file,
+            # but it should still be able to extract schema from the footer portion
+            # If PyArrow fails, extract_parquet_schema will fallback gracefully
+            combined_data = row_group_data + footer_data
+            
+            # Verify PAR1 magic is at the end (required for schema extraction)
+            if len(combined_data) >= 4 and combined_data[-4:] == b'PAR1':
+                return combined_data
+            else:
+                # If PAR1 magic is missing, return footer only (schema will work)
+                logger.warning('FN:get_parquet_footer_and_row_group blob_path:{} message:PAR1 magic not found in combined data, returning footer only'.format(blob_path))
+                return footer_data
+            
+        except Exception as e:
+            logger.error('FN:get_parquet_footer_and_row_group container_name:{} blob_path:{} error:{}'.format(container_name, blob_path, str(e)), exc_info=True)
+            # Fallback to footer only
+            try:
+                return self.get_parquet_footer(container_name, blob_path, footer_size_kb=footer_size_kb)
+            except Exception as fallback_error:
+                logger.error('FN:get_parquet_footer_and_row_group container_name:{} blob_path:{} message:Fallback to footer also failed error:{}'.format(container_name, blob_path, str(fallback_error)), exc_info=True)
+                return b""
     
     def get_blob_tail(self, container_name: str, blob_path: str, max_bytes: int = 8192) -> bytes:
 

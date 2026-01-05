@@ -47,15 +47,7 @@ import {
 
 
 
-const HARDCODED_AZURE_CREDENTIALS = {
-  auth_method: 'service_principal',
-  storage_type: 'datalake',
-  storage_account_name: import.meta.env.VITE_AZURE_STORAGE_ACCOUNT_NAME || '',
-  client_id: import.meta.env.VITE_AZURE_CLIENT_ID || '',
-  client_secret: import.meta.env.VITE_AZURE_CLIENT_SECRET || '',
-  tenant_id: import.meta.env.VITE_AZURE_TENANT_ID || '',
-  datalake_paths: import.meta.env.VITE_AZURE_DATALAKE_PATHS || '',
-};
+// Removed HARDCODED_AZURE_CREDENTIALS - now using manual input from form
 
 const ConnectorsPage = () => {
   const [myConnections, setMyConnections] = useState([]);
@@ -218,15 +210,12 @@ const ConnectorsPage = () => {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       
       
+      // Use config values directly from form (manual input)
       const finalConfig = connectionType === 'Service Principal' ? {
         ...config,
-        account_name: HARDCODED_AZURE_CREDENTIALS.storage_account_name,
-        tenant_id: HARDCODED_AZURE_CREDENTIALS.tenant_id,
-        client_id: HARDCODED_AZURE_CREDENTIALS.client_id,
-        client_secret: HARDCODED_AZURE_CREDENTIALS.client_secret,
-        folder_path: HARDCODED_AZURE_CREDENTIALS.datalake_paths,
-        storage_type: HARDCODED_AZURE_CREDENTIALS.storage_type,
-        use_dfs_endpoint: true,
+        // Ensure use_dfs_endpoint is set for Service Principal
+        use_dfs_endpoint: config.use_dfs_endpoint !== undefined ? config.use_dfs_endpoint : true,
+        storage_type: config.storage_type || 'datalake',
       } : config;
       
       
@@ -316,15 +305,12 @@ const ConnectorsPage = () => {
         const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
         
         
+        // Use config values directly from form (manual input)
         const finalConfig = connectionType === 'Service Principal' ? {
           ...config,
-          account_name: HARDCODED_AZURE_CREDENTIALS.storage_account_name,
-          tenant_id: HARDCODED_AZURE_CREDENTIALS.tenant_id,
-          client_id: HARDCODED_AZURE_CREDENTIALS.client_id,
-          client_secret: HARDCODED_AZURE_CREDENTIALS.client_secret,
-          folder_path: HARDCODED_AZURE_CREDENTIALS.datalake_paths,
-          storage_type: HARDCODED_AZURE_CREDENTIALS.storage_type,
-          use_dfs_endpoint: true,
+          // Ensure use_dfs_endpoint is set for Service Principal
+          use_dfs_endpoint: config.use_dfs_endpoint !== undefined ? config.use_dfs_endpoint : true,
+          storage_type: config.storage_type || 'datalake',
         } : config;
         
         
@@ -548,11 +534,22 @@ const ConnectorsPage = () => {
                             skip_deduplication: true,  // Skip deduplication for test discoveries
                           }),
                         })
-                        .then(res => {
+                        .then(async res => {
                           if (!res.ok) {
-                            return res.json().then(err => Promise.reject(new Error(err.error || `HTTP ${res.status}: ${res.statusText}`)));
-                    }
-                          return res.json();
+                            let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
+                            try {
+                              const errorData = await res.json();
+                              errorMessage = errorData.error || errorMessage;
+                            } catch (e) {
+                              // If response is not JSON, use status text
+                            }
+                            return Promise.reject(new Error(errorMessage));
+                          }
+                          try {
+                            return await res.json();
+                          } catch (e) {
+                            return Promise.reject(new Error('Invalid JSON response from server'));
+                          }
                         })
                         .then(discoveryResult => {
                           const saved = discoveryResult.created_count || discoveryResult.discovered_count || 0;
@@ -589,18 +586,32 @@ const ConnectorsPage = () => {
                           setTesting(false);
                         })
                         .catch(err => {
-                          setDiscoveryProgress(prev => [...prev, `Error saving assets: ${err.message}`]);
+                          const errorMessage = err instanceof Error ? err.message : String(err || 'Unknown error');
+                          setDiscoveryProgress(prev => [...prev, `Error saving assets: ${errorMessage}`]);
                           const actualContainerCount = actualContainersProcessed.size || 1;
-                setTestResult({
-                  success: true,
-                            message: `Connection successful! Found ${totalDiscovered} files but error saving: ${err.message}`,
+                          setTestResult({
+                            success: true,
+                            message: `Connection successful! Found ${totalDiscovered} files but error saving: ${errorMessage}`,
                             discoveredAssets: 0,
                             totalContainers: actualContainerCount,
-                  connectionId: connection.id,
-                  containers: containersData.containers || [],
-                });
+                            connectionId: connection.id,
+                            containers: containersData.containers || [],
+                          });
                           
                           // Set testing to false even on error
+                          setTesting(false);
+                        })
+                        .catch(finalError => {
+                          // Final catch for any unhandled errors in the promise chain
+                          const errorMessage = finalError instanceof Error ? finalError.message : String(finalError || 'Unknown error');
+                          console.error('Unhandled error in discovery process:', finalError);
+                          setDiscoveryProgress(prev => [...prev, `Unexpected error: ${errorMessage}`]);
+                          setTestResult({
+                            success: false,
+                            message: `Error during discovery: ${errorMessage}`,
+                            discoveredAssets: 0,
+                            totalContainers: 0,
+                          });
                           setTesting(false);
                         });
                       } else if (data.type === 'error') {
@@ -693,17 +704,18 @@ const ConnectorsPage = () => {
                   setConnectionType(selectedType);
                   
                   if (selectedType === 'Service Principal') {
+                    // Initialize empty config for manual input
                     setConfig({
-                      account_name: HARDCODED_AZURE_CREDENTIALS.storage_account_name,
-                      tenant_id: HARDCODED_AZURE_CREDENTIALS.tenant_id,
-                      client_id: HARDCODED_AZURE_CREDENTIALS.client_id,
-                      client_secret: HARDCODED_AZURE_CREDENTIALS.client_secret,
-                      folder_path: HARDCODED_AZURE_CREDENTIALS.datalake_paths,
-                      storage_type: HARDCODED_AZURE_CREDENTIALS.storage_type,
+                      account_name: '',
+                      tenant_id: '',
+                      client_id: '',
+                      client_secret: '',
+                      folder_path: '',
+                      storage_type: 'datalake',
                       use_dfs_endpoint: true,
                     });
                   } else {
-                    
+                    // Connection String type - clear config
                     setConfig({});
                   }
                 }}
@@ -742,6 +754,16 @@ const ConnectorsPage = () => {
                   onChange={(e) => setConfig({...config, name: e.target.value})}
                 />
                 </Tooltip>
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  required
+                  label="Application Name"
+                  value={config.application_name || ''}
+                  onChange={(e) => setConfig({...config, application_name: e.target.value})}
+                  helperText="Name of the application/system this connection belongs to (used for filtering assets)"
+                />
               </Grid>
               {connectionType === 'Connection String' && selectedConnector?.id === 'azure_blob' && (
                 <>
@@ -783,8 +805,8 @@ const ConnectorsPage = () => {
                       fullWidth
                       required
                       label="Storage Account Name"
-                      value={HARDCODED_AZURE_CREDENTIALS.storage_account_name}
-                      disabled
+                      value={config.account_name || ''}
+                      onChange={(e) => setConfig({...config, account_name: e.target.value})}
                       helperText="Your Azure Storage account name"
                     />
                   </Grid>
@@ -793,8 +815,8 @@ const ConnectorsPage = () => {
                       fullWidth
                       required
                       label="Tenant ID"
-                      value={HARDCODED_AZURE_CREDENTIALS.tenant_id}
-                      disabled
+                      value={config.tenant_id || ''}
+                      onChange={(e) => setConfig({...config, tenant_id: e.target.value})}
                       helperText="Azure AD Tenant ID"
                     />
                   </Grid>
@@ -803,8 +825,8 @@ const ConnectorsPage = () => {
                       fullWidth
                       required
                       label="Client ID (Application ID)"
-                      value={HARDCODED_AZURE_CREDENTIALS.client_id}
-                      disabled
+                      value={config.client_id || ''}
+                      onChange={(e) => setConfig({...config, client_id: e.target.value})}
                       helperText="Service Principal Client ID / Application ID"
                     />
                   </Grid>
@@ -814,8 +836,8 @@ const ConnectorsPage = () => {
                       required
                       label="Client Secret"
                       type="password"
-                      value={HARDCODED_AZURE_CREDENTIALS.client_secret}
-                      disabled
+                      value={config.client_secret || ''}
+                      onChange={(e) => setConfig({...config, client_secret: e.target.value})}
                       helperText="Service Principal Client Secret"
                     />
                   </Grid>
@@ -823,10 +845,23 @@ const ConnectorsPage = () => {
                     <TextField
                       fullWidth
                       label="Folder Path (optional)"
-                      value={HARDCODED_AZURE_CREDENTIALS.datalake_paths}
-                      disabled
-                      helperText="Azure Data Lake path"
+                      value={config.folder_path || ''}
+                      onChange={(e) => setConfig({...config, folder_path: e.target.value})}
+                      helperText="Azure Data Lake path (e.g., abfs://container@account.dfs.core.windows.net/path)"
                     />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <FormControl fullWidth>
+                      <InputLabel>Storage Type</InputLabel>
+                      <Select
+                        value={config.storage_type || 'datalake'}
+                        onChange={(e) => setConfig({...config, storage_type: e.target.value, use_dfs_endpoint: e.target.value === 'datalake'})}
+                        label="Storage Type"
+                      >
+                        <MenuItem value="datalake">Data Lake Gen2</MenuItem>
+                        <MenuItem value="blob">Blob Storage</MenuItem>
+                      </Select>
+                    </FormControl>
                   </Grid>
                 </>
               )}

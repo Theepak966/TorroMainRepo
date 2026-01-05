@@ -112,3 +112,13 @@ def get_azure_connections_from_db():
                 SELECT id, name, connector_type, connection_type, config, status
                 FROM connections
                 WHERE connector_type = 'azure_blob' AND status = 'active'
+            """
+            cursor.execute(sql)
+            connections = cursor.fetchall()
+            return [json.loads(conn['config']) if isinstance(conn['config'], str) else conn['config'] for conn in connections]
+    except Exception as e:
+        logger.error(f'Error getting Azure connections: {e}')
+        return []
+    finally:
+        if db_conn:
+            db_conn.close()

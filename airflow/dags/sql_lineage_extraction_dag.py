@@ -109,15 +109,39 @@ def parse_sql_and_create_lineage():
                         source_tables = lineage_result.get('source_tables', [])
                         
 
+                        # Get target asset ID
                         cursor.execute("""
                             SELECT id FROM assets 
                             WHERE name LIKE %s 
                             LIMIT 1
+                        """, (target_table,))
+                        target_result = cursor.fetchone()
+                        if not target_result:
+                            continue
+                        target_asset_id = target_result['id']
+                        
+                        # Process each source table
+                        for source_table in source_tables:
+                            cursor.execute("""
                                 SELECT id FROM assets 
                                 WHERE name LIKE %s 
                                 LIMIT 1
+                            """, (source_table,))
+                            source_result = cursor.fetchone()
+                            if not source_result:
+                                continue
+                            source_asset_id = source_result['id']
+                            
+                            # Check if relationship already exists
+                            cursor.execute("""
                                 SELECT id FROM lineage_relationships 
                                 WHERE source_asset_id = %s AND target_asset_id = %s
+                            """, (source_asset_id, target_asset_id))
+                            if cursor.fetchone():
+                                continue
+                            
+                            # Insert new relationship
+                            cursor.execute("""
                                 INSERT INTO lineage_relationships (
                                     source_asset_id, target_asset_id, relationship_type,
                                     source_type, target_type, column_lineage,
@@ -127,3 +151,29 @@ def parse_sql_and_create_lineage():
                                 ) VALUES (
                                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
                                 )
+                            """, (
+                                source_asset_id, target_asset_id, 'transformation',
+                                'table', 'table', json.dumps([]),
+                                None, None,
+                                'sql_parsing', None,
+                                1.0, 'sql_parsing'
+                            ))
+                            created_count += 1
+                        
+                        # Commit after processing all relationships
+                        conn.commit()
+                    except Exception as e:
+                        logger.error(f'Error processing SQL query: {e}')
+                        skipped_count += 1
+                        continue
+                
+                logger.info(f'Created {created_count} lineage relationships, skipped {skipped_count}')
+        except Exception as e:
+            logger.error(f'Error in SQL lineage extraction: {e}')
+            return 0
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        logger.error(f'Error in parse_sql_and_create_lineage: {e}')
+        return 0

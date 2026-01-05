@@ -38,10 +38,34 @@ def get_new_discoveries() -> List[Dict]:
                 WHERE discovered_at >= DATE_SUB(NOW(), INTERVAL 20 MINUTE)
                   AND notification_sent_at IS NULL
                 ORDER BY discovered_at DESC
+            """
+            cursor.execute(sql)
+            discoveries = cursor.fetchall()
+            
+            if not discoveries:
+                return []
+            
+            # Update notification status
+            discovery_ids = [d['id'] for d in discoveries]
+            placeholders = ','.join(['%s'] * len(discovery_ids))
+            update_sql = f"""
                 UPDATE data_discovery
                 SET notification_sent_at = NOW(),
                     notification_recipients = %s
                 WHERE id IN ({placeholders})
+            """
+            cursor.execute(update_sql, [json.dumps([])] + discovery_ids)
+            conn.commit()
+            
+            return discoveries
+    finally:
+        if conn:
+            conn.close()
+
+
+def format_email_html(discoveries: List[Dict], base_url: str = "https://74.225.20.170") -> str:
+    """Format discoveries as HTML email"""
+    html_content = """
         <html>
         <body>
             <h2>New Data Discovered</h2>
@@ -69,3 +93,5 @@ def get_new_discoveries() -> List[Dict]:
             <p>Best regards,<br>Torro Data Discovery System</p>
         </body>
         </html>
+    """
+    return html_content.format(discoveries=discoveries)

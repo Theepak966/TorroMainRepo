@@ -204,39 +204,69 @@ const DataLineagePage = () => {
   const [showImpactAnalysis, setShowImpactAnalysis] = useState(false);
 
   const fetchAllAssets = async () => {
-    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-    // Prefer paginated endpoint; fall back to old array response.
-    const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=500`);
-    if (!firstResp.ok) return [];
+      // Prefer paginated endpoint; fall back to old array response.
+      const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=500`);
+      if (!firstResp.ok) {
+        console.error('Failed to fetch first page of assets:', firstResp.status, firstResp.statusText);
+        return [];
+      }
 
-    const firstData = await firstResp.json();
-    if (Array.isArray(firstData)) {
-      return firstData;
-    }
+      let firstData;
+      try {
+        firstData = await firstResp.json();
+      } catch (jsonError) {
+        console.error('Failed to parse JSON response:', jsonError);
+        return [];
+      }
 
-    if (!firstData || !Array.isArray(firstData.assets) || !firstData.pagination) {
+      if (Array.isArray(firstData)) {
+        return firstData;
+      }
+
+      if (!firstData || !Array.isArray(firstData.assets) || !firstData.pagination) {
+        console.warn('Invalid response format from assets API');
+        return [];
+      }
+
+      const all = [...firstData.assets];
+      const totalPages = Number(firstData.pagination.total_pages || 1);
+
+      // Safety cap to avoid accidental infinite/huge loops
+      const cappedTotalPages = Math.min(totalPages, 200);
+
+      for (let p = 2; p <= cappedTotalPages; p++) {
+        try {
+          const resp = await fetch(`${API_BASE_URL}/api/assets?page=${p}&per_page=500`);
+          if (!resp.ok) {
+            console.warn(`Failed to fetch page ${p}:`, resp.status, resp.statusText);
+            break;
+          }
+          let data;
+          try {
+            data = await resp.json();
+          } catch (jsonError) {
+            console.error(`Failed to parse JSON for page ${p}:`, jsonError);
+            break;
+          }
+          if (data && Array.isArray(data.assets)) {
+            all.push(...data.assets);
+          } else {
+            break;
+          }
+        } catch (pageError) {
+          console.error(`Error fetching page ${p}:`, pageError);
+          break;
+        }
+      }
+
+      return all;
+    } catch (error) {
+      console.error('Error in fetchAllAssets:', error);
       return [];
     }
-
-    const all = [...firstData.assets];
-    const totalPages = Number(firstData.pagination.total_pages || 1);
-
-    // Safety cap to avoid accidental infinite/huge loops
-    const cappedTotalPages = Math.min(totalPages, 200);
-
-    for (let p = 2; p <= cappedTotalPages; p++) {
-      const resp = await fetch(`${API_BASE_URL}/api/assets?page=${p}&per_page=500`);
-      if (!resp.ok) break;
-      const data = await resp.json();
-      if (data && Array.isArray(data.assets)) {
-        all.push(...data.assets);
-      } else {
-        break;
-      }
-    }
-
-    return all;
   };
 
   const fetchLineage = async () => {
@@ -248,7 +278,7 @@ const DataLineagePage = () => {
       const relationshipsResponse = await fetch(`${API_BASE_URL}/api/lineage/relationships`);
       const assets = await fetchAllAssets();
       
-      if (assets && assets.length >= 0) {
+      if (assets && assets.length > 0) {
         const relationships = relationshipsResponse.ok ? await relationshipsResponse.json() : [];
         
         
@@ -1360,22 +1390,78 @@ const DataLineagePage = () => {
                                 />
                                 </TableCell>
                               <TableCell>
-                                {isPII ? (
-                                  <Chip 
-                                    label="PII" 
-                                    size="small" 
-                                    color="error"
-                                    sx={{ fontWeight: 600 }}
-                                  />
-                                ) : (
-                                  <Chip 
-                                    label="Safe" 
-                                    size="small" 
-                                    color="success"
-                                    variant="outlined"
-                                    sx={{ fontWeight: 500 }}
-                                  />
-                                )}
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
+                                    <Chip 
+                                      label="PII" 
+                                      size="small" 
+                                      color="error"
+                                      sx={{ fontWeight: 600, cursor: 'pointer' }}
+                                      onClick={async () => {
+                                        try {
+                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                          const response = await fetch(
+                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                            {
+                                              method: 'PUT',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                pii_detected: false,
+                                                pii_types: null
+                                              })
+                                            }
+                                          );
+                                          if (response.ok) {
+                                            const updatedAsset = { ...selectedAssetDetails };
+                                            updatedAsset.columns = updatedAsset.columns.map(c => 
+                                              c.name === col.name 
+                                                ? { ...c, pii_detected: false, pii_types: null }
+                                                : c
+                                            );
+                                            setSelectedAssetDetails(updatedAsset);
+                                          }
+                                        } catch (err) {
+                                          console.error('Failed to update PII status:', err);
+                                        }
+                                      }}
+                                    />
+                                  ) : (
+                                    <Chip 
+                                      label="Safe" 
+                                      size="small" 
+                                      color="success"
+                                      variant="outlined"
+                                      sx={{ fontWeight: 500, cursor: 'pointer' }}
+                                      onClick={async () => {
+                                        try {
+                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                          const response = await fetch(
+                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                            {
+                                              method: 'PUT',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                pii_detected: true,
+                                                pii_types: col.pii_types || ['PII']
+                                              })
+                                            }
+                                          );
+                                          if (response.ok) {
+                                            const updatedAsset = { ...selectedAssetDetails };
+                                            updatedAsset.columns = updatedAsset.columns.map(c => 
+                                              c.name === col.name 
+                                                ? { ...c, pii_detected: true, pii_types: c.pii_types || ['PII'] }
+                                                : c
+                                            );
+                                            setSelectedAssetDetails(updatedAsset);
+                                          }
+                                        } catch (err) {
+                                          console.error('Failed to update PII status:', err);
+                                        }
+                                      }}
+                                    />
+                                  )}
+                                </Box>
                               </TableCell>
                               <TableCell sx={{ color: '#666' }}>
                                 {col.description || '-'}
@@ -2154,7 +2240,7 @@ const DataLineagePage = () => {
                                     />
                                 </TableCell>
                                   <TableCell>
-                                    {isPII ? (
+                                    {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
                                       <Chip 
                                         label="PII" 
                                         size="small" 

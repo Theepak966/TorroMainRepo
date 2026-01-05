@@ -375,7 +375,7 @@ const MarketplacePage = () => {
     
     try {
       
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      // Removed hardcoded delay - no longer needed
       
       
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;

@@ -23,13 +23,19 @@ const Sidebar = ({ open, onClose }) => {
   const location = useLocation();
 
   const menuItems = [
+    { label: 'Main Menu', icon: <Dashboard />, path: '/', isRoot: true },
     { label: 'Connectors', icon: <Settings />, path: 'connectors' },
     { label: 'Discovered Assets', icon: <AccountTree />, path: '' },
     { label: 'Data Lineage', icon: <Timeline />, path: 'lineage' },
   ];
 
-  const handleItemClick = (path) => {
-    navigate(path || '/');
+  const handleItemClick = (path, isRoot = false) => {
+    if (isRoot) {
+      // Navigate to root IP (not /airflow-fe)
+      window.location.href = '/';
+    } else {
+      navigate(path || '/');
+    }
     onClose();
   };
 
@@ -48,15 +54,23 @@ const Sidebar = ({ open, onClose }) => {
     >
       <Box sx={{ pt: 3 }}>
         <List sx={{ px: 2 }}>
-          {menuItems.map((item) => {
-            const itemPath = item.path === '' ? '/' : `/${item.path}`;
+          {menuItems.map((item, index) => {
+            // Handle different path formats: '/', '', or 'path'
+            let itemPath;
+            if (item.path === '/') {
+              itemPath = '/';
+            } else if (item.path === '') {
+              itemPath = '/';
+            } else {
+              itemPath = `/${item.path}`;
+            }
             
             const normalizedPath = location.pathname.replace(/^\/airflow-fe/, '') || '/';
             const isActive = normalizedPath === itemPath;
             return (
-              <ListItem key={item.path} disablePadding>
+              <ListItem key={`${item.path}-${index}`} disablePadding>
                 <ListItemButton
-                  onClick={() => handleItemClick(item.path)}
+                  onClick={() => handleItemClick(item.path, item.isRoot)}
                   sx={{
                     borderRadius: 2,
                     mb: 0.5,

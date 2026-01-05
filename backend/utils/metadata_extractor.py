@@ -37,12 +37,13 @@ logger = logging.getLogger(__name__)
 
 try:
     from .azure_dlp_client import detect_pii_in_column
-    AZURE_DLP_AVAILABLE = True
+    # Azure DLP is disabled - using regex-based detection only
+    AZURE_DLP_AVAILABLE = False
 except ImportError:
     logger.warning('FN:metadata_extractor_import AZURE_DLP_AVAILABLE:{}'.format(False))
     AZURE_DLP_AVAILABLE = False
     
-    def detect_pii_in_column(column_name: str) -> Dict:
+    def detect_pii_in_column(column_name: str, sample_data=None) -> Dict:
         return {"pii_detected": False, "pii_types": []}
 
 
@@ -52,70 +53,237 @@ def generate_file_hash(file_content: bytes) -> str:
     return hash_obj.hexdigest(16)
 
 
-def extract_parquet_schema(file_content: bytes) -> Dict:
-
-
-
+def extract_parquet_schema(file_content: bytes, include_pii_detection: bool = False, sample_data: Optional[Dict] = None) -> Dict:
+    """
+    Extract schema from parquet file content.
+    Robust implementation that handles various parquet file formats and edge cases.
+    
+    Args:
+        file_content: Parquet file bytes (can be just footer for schema, or full file for PII)
+        include_pii_detection: If True, attempts to extract sample data for PII detection
+        sample_data: Optional pre-extracted sample data (for when footer-only is used)
+    
+    Returns:
+        Dictionary with columns, types, and optionally PII detection
+    """
+    if not file_content or len(file_content) == 0:
+        logger.warning('FN:extract_parquet_schema message:Empty file content provided')
+        return {"columns": [], "num_columns": 0}
+    
     try:
-        parquet_file = pq.ParquetFile(io.BytesIO(file_content))
-        schema = parquet_file.schema_arrow
+        # Validate parquet file format
+        if len(file_content) < 8 or file_content[-4:] != b'PAR1':
+            logger.warning('FN:extract_parquet_schema file_content_size:{} message:Invalid parquet file (missing PAR1 magic)'.format(len(file_content)))
+            return {"columns": [], "num_columns": 0}
         
-
-        sample_data = None
+        # Create ParquetFile object - this validates the file structure
+        # Note: For combined structures (row group + footer), PyArrow might fail to parse
+        # but it should still be able to extract schema from the footer portion
         try:
-            table = parquet_file.read_row_group(0) if parquet_file.num_row_groups > 0 else None
-            if table is not None:
-
-                sample_table = table.slice(0, min(10, len(table)))
-                sample_data = sample_table.to_pandas().to_dict('list')
+            parquet_file = pq.ParquetFile(io.BytesIO(file_content))
+        except (IOError, OSError, ValueError, TypeError) as e:
+            # If combined structure fails, try to extract schema from footer only
+            # Footer should be at the end of file_content (has PAR1 magic)
+            if len(file_content) > 1000 and file_content[-4:] == b'PAR1':
+                logger.debug('FN:extract_parquet_schema message:Combined structure failed, attempting footer-only extraction error:{}'.format(str(e)))
+                try:
+                    # Try to extract footer from end (last 2MB should contain footer)
+                    footer_start = max(0, len(file_content) - 2 * 1024 * 1024)
+                    footer_only = file_content[footer_start:]
+                    if len(footer_only) >= 8 and footer_only[-4:] == b'PAR1':
+                        parquet_file = pq.ParquetFile(io.BytesIO(footer_only))
+                        logger.info('FN:extract_parquet_schema message:Successfully extracted schema from footer-only after combined structure failed')
+                    else:
+                        logger.warning('FN:extract_parquet_schema invalid_parquet_file error:{}'.format(str(e)))
+                        return {"columns": [], "num_columns": 0}
+                except Exception as footer_error:
+                    logger.warning('FN:extract_parquet_schema invalid_parquet_file error:{} footer_fallback_error:{}'.format(str(e), str(footer_error)))
+                    return {"columns": [], "num_columns": 0}
+            else:
+                logger.warning('FN:extract_parquet_schema invalid_parquet_file error:{}'.format(str(e)))
+                return {"columns": [], "num_columns": 0}
         except Exception as e:
-            logger.debug('FN:extract_parquet_schema message:Could not read sample data error:{}'.format(str(e)))
-            sample_data = None
+            logger.error('FN:extract_parquet_schema unexpected_error error:{}'.format(str(e)), exc_info=True)
+            return {"columns": [], "num_columns": 0}
+        
+        # Get schema
+        try:
+            schema = parquet_file.schema_arrow
+        except Exception as e:
+            logger.warning('FN:extract_parquet_schema message:Could not read schema error:{}'.format(str(e)))
+            return {"columns": [], "num_columns": 0}
+        
+        if schema is None or len(schema) == 0:
+            logger.warning('FN:extract_parquet_schema message:Empty schema found')
+            return {"columns": [], "num_columns": 0}
+        
+        # Try to get sample data for PII detection if requested
+        # For PII detection to work properly, we need actual data samples, not just column names
+        # This works with full file downloads or downloads that include row group data
+        if include_pii_detection and sample_data is None:
+            try:
+                # Check if we have enough data to read row groups
+                # If file content is > 50KB, we likely have row group data (not just footer)
+                has_row_group_data = len(file_content) > 50000
+                
+                if has_row_group_data and parquet_file.num_row_groups > 0:
+                    try:
+                        # Try to read first row group for sample data
+                        table = parquet_file.read_row_group(0)
+                        if table is not None and len(table) > 0:
+                            # Get up to 20 rows for better PII detection accuracy
+                            sample_size = min(20, len(table))
+                            sample_table = table.slice(0, sample_size)
+                            sample_data = sample_table.to_pandas().to_dict('list')
+                            logger.info('FN:extract_parquet_schema message:Extracted {} rows from row group for PII detection'.format(sample_size))
+                        else:
+                            logger.debug('FN:extract_parquet_schema message:Row group exists but is empty')
+                            sample_data = None
+                    except Exception as e:
+                        logger.debug('FN:extract_parquet_schema message:Could not read row group data error:{}'.format(str(e)))
+                        sample_data = None
+                else:
+                    # Footer-only mode: no row group data available
+                    # PII detection will use column names only (less accurate but still works)
+                    logger.debug('FN:extract_parquet_schema message:Footer-only mode, PII detection will use column names only')
+                    sample_data = None
+            except Exception as e:
+                logger.debug('FN:extract_parquet_schema message:Error extracting sample data error:{}'.format(str(e)))
+                sample_data = None
         
         columns = []
         for i in range(len(schema)):
-            field = schema.field(i)
-            
-
-            column_samples = None
-            if sample_data and field.name in sample_data:
-                column_samples = [str(val) for val in sample_data[field.name][:10] if val is not None]
-            
-
-            pii_result = detect_pii_in_column(field.name, column_samples)
-            
-            column_data = {
-                "name": field.name,
-                "type": str(field.type),
-                "nullable": field.nullable
-            }
-            
-
-            if pii_result.get("pii_detected"):
-                column_data["pii_detected"] = True
-                column_data["pii_types"] = pii_result.get("pii_types", [])
-            else:
-                column_data["pii_detected"] = False
-                column_data["pii_types"] = None
-            
-            columns.append(column_data)
+            try:
+                field = schema.field(i)
+                
+                if field is None:
+                    logger.warning('FN:extract_parquet_schema field_index:{} message:Null field found, skipping'.format(i))
+                    continue
+                
+                # Get column samples for PII detection
+                # PII detection works best with actual data samples, but falls back to column names
+                column_samples = None
+                if include_pii_detection:
+                    if sample_data and field.name in sample_data:
+                        # Extract up to 20 sample values for better PII detection accuracy
+                        column_samples = [str(val) for val in sample_data[field.name][:20] if val is not None]
+                        logger.debug('FN:extract_parquet_schema field:{} samples:{} message:Using {} data samples for PII detection'.format(
+                            field.name, len(column_samples), len(column_samples)
+                        ))
+                    else:
+                        # Fallback to column name only (no data samples available - footer-only mode)
+                        column_samples = None
+                        logger.debug('FN:extract_parquet_schema field:{} message:Using column name only for PII detection (no data samples)'.format(field.name))
+                
+                # PII detection: Use column name + samples if available (best accuracy), or column name only (fallback)
+                pii_result = detect_pii_in_column(field.name, column_samples)
+                
+                # Extract type information with better handling of complex types
+                arrow_type = field.type
+                type_str = str(arrow_type)
+                
+                # Enhanced type information for complex types
+                type_info = {
+                    "base_type": type_str,
+                    "is_nested": False,
+                    "is_nullable": field.nullable
+                }
+                
+                # Handle nested/complex types
+                try:
+                    import pyarrow as pa
+                    if isinstance(arrow_type, pa.StructType):
+                        type_info["is_nested"] = True
+                        type_info["nested_type"] = "struct"
+                        type_info["fields"] = {f.name: str(f.type) for f in arrow_type}
+                    elif isinstance(arrow_type, pa.ListType):
+                        type_info["is_nested"] = True
+                        type_info["nested_type"] = "list"
+                        type_info["element_type"] = str(arrow_type.value_type)
+                    elif isinstance(arrow_type, pa.MapType):
+                        type_info["is_nested"] = True
+                        type_info["nested_type"] = "map"
+                        type_info["key_type"] = str(arrow_type.key_type)
+                        type_info["value_type"] = str(arrow_type.value_type)
+                except Exception as e:
+                    logger.debug('FN:extract_parquet_schema field:{} message:Could not extract nested type info error:{}'.format(field.name, str(e)))
+                
+                column_data = {
+                    "name": field.name or f"column_{i}",  # Fallback if name is None
+                    "type": type_str,
+                    "type_info": type_info,
+                    "nullable": field.nullable
+                }
+                
+                # Add PII detection results
+                if include_pii_detection:
+                    if pii_result.get("pii_detected"):
+                        column_data["pii_detected"] = True
+                        column_data["pii_types"] = pii_result.get("pii_types", [])
+                    else:
+                        column_data["pii_detected"] = False
+                        column_data["pii_types"] = None
+                else:
+                    # PII detection skipped - mark as None
+                    column_data["pii_detected"] = None
+                    column_data["pii_types"] = None
+                
+                columns.append(column_data)
+                
+            except Exception as e:
+                logger.warning('FN:extract_parquet_schema field_index:{} error:{} message:Skipping field due to error'.format(i, str(e)))
+                continue
+        
+        if len(columns) == 0:
+            logger.warning('FN:extract_parquet_schema message:No columns extracted from schema')
+            return {"columns": [], "num_columns": 0}
         
         schema_dict = {
             "columns": columns,
             "num_columns": len(columns),
         }
         
+        # Extract additional metadata if available
         try:
             metadata = parquet_file.metadata
-            if metadata and hasattr(metadata, 'num_rows'):
-                schema_dict["num_rows"] = metadata.num_rows
-        except Exception:
-            pass
+            if metadata:
+                if hasattr(metadata, 'num_rows') and metadata.num_rows is not None:
+                    schema_dict["num_rows"] = metadata.num_rows
+                
+                if hasattr(metadata, 'num_row_groups'):
+                    schema_dict["num_row_groups"] = metadata.num_row_groups
+                
+                # Extract file-level metadata if available
+                if hasattr(metadata, 'metadata') and metadata.metadata:
+                    try:
+                        # Parquet metadata is stored as bytes, try to decode
+                        file_metadata = {}
+                        for key, value in metadata.metadata.items():
+                            try:
+                                if isinstance(key, bytes):
+                                    key = key.decode('utf-8', errors='ignore')
+                                if isinstance(value, bytes):
+                                    value = value.decode('utf-8', errors='ignore')
+                                file_metadata[key] = value
+                            except Exception:
+                                pass
+                        if file_metadata:
+                            schema_dict["file_metadata"] = file_metadata
+                    except Exception as e:
+                        logger.debug('FN:extract_parquet_schema message:Could not extract file metadata error:{}'.format(str(e)))
+        except Exception as e:
+            logger.debug('FN:extract_parquet_schema message:Could not extract metadata error:{}'.format(str(e)))
+        
+        logger.info('FN:extract_parquet_schema num_columns:{} num_rows:{}'.format(
+            len(columns), schema_dict.get("num_rows", "unknown")
+        ))
         
         return schema_dict
         
     except Exception as e:
-        logger.warning('FN:extract_parquet_schema file_content_size:{} error:{}'.format(len(file_content) if file_content else 0, str(e)))
+        logger.error('FN:extract_parquet_schema file_content_size:{} error:{}'.format(
+            len(file_content) if file_content else 0, str(e)
+        ), exc_info=True)
         return {"columns": [], "num_columns": 0}
 
 
@@ -287,7 +455,8 @@ def extract_json_schema(file_content: bytes) -> Dict:
                 }
                 
 
-                if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                # Always use PII detection result (regex-based, Azure DLP disabled)
+                if pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
                 else:
@@ -316,7 +485,7 @@ def extract_json_schema(file_content: bytes) -> Dict:
                     }
                     
 
-                    if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                    if pii_result.get("pii_detected"):
                         column_data["pii_detected"] = True
                         column_data["pii_types"] = pii_result.get("pii_types", [])
                     else:
@@ -390,7 +559,8 @@ def extract_avro_schema(file_content: bytes) -> Dict:
                     "nullable": True
                 }
                 
-                if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                # Always use PII detection result (regex-based, Azure DLP disabled)
+                if pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
                 else:
@@ -455,7 +625,7 @@ def extract_excel_schema(file_content: bytes) -> Dict:
                 "nullable": True
             }
             
-            if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+            if pii_result.get("pii_detected"):
                 column_data["pii_detected"] = True
                 column_data["pii_types"] = pii_result.get("pii_types", [])
             else:
@@ -502,7 +672,8 @@ def extract_xml_schema(file_content: bytes) -> Dict:
                     "nullable": True
                 }
                 
-                if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+                # Always use PII detection result (regex-based, Azure DLP disabled)
+                if pii_result.get("pii_detected"):
                     column_data["pii_detected"] = True
                     column_data["pii_types"] = pii_result.get("pii_types", [])
                 else:
@@ -547,7 +718,7 @@ def extract_orc_schema(file_content: bytes) -> Dict:
                 "nullable": field.nullable
             }
             
-            if AZURE_DLP_AVAILABLE and pii_result.get("pii_detected"):
+            if pii_result.get("pii_detected"):
                 column_data["pii_detected"] = True
                 column_data["pii_types"] = pii_result.get("pii_types", [])
             else:
@@ -699,7 +870,9 @@ def extract_file_metadata(blob_info: Dict, file_content: Optional[bytes] = None)
 
     if file_format == "parquet" and file_content:
         try:
-            schema_json = extract_parquet_schema(file_content)
+            # Extract schema with PII detection (regex-based, no Azure DLP)
+            # Uses column names for PII detection (no data samples needed)
+            schema_json = extract_parquet_schema(file_content, include_pii_detection=True, sample_data=None)
             schema_hash = generate_schema_hash(schema_json)
         except Exception as e:
             logger.warning('FN:extract_file_metadata file_name:{} file_format:{} error:{}'.format(file_name, file_format, str(e)))
