@@ -136,3 +136,72 @@ def check_file_exists(
     finally:
         if conn:
             conn.close()
+
+
+@retry_db_operation(max_retries=None, base_delay=1.0, max_delay=60.0, max_total_time=3600.0)
+def check_asset_exists(
+    connector_id: str,
+    storage_path: str
+) -> Optional[Dict]:
+    """Check if an asset exists by connector_id and storage_path"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT id, technical_metadata, operational_metadata
+                FROM assets
+                WHERE connector_id = %s
+                AND JSON_EXTRACT(technical_metadata, '$.storage_metadata.azure.path') = %s
+                OR JSON_EXTRACT(technical_metadata, '$.file_metadata.basic.name') = %s
+            """
+            cursor.execute(sql, (connector_id, storage_path, storage_path))
+            result = cursor.fetchone()
+            return result
+    except Exception as e:
+        logger.error(f'Error checking asset existence: {e}')
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def should_update_or_insert(existing_record: Optional[Dict], file_hash: str, schema_hash: str) -> Tuple[bool, bool]:
+    """
+    Determine if an asset should be updated or inserted.
+    Returns: (should_update, schema_changed)
+    """
+    if not existing_record:
+        return (True, False)  # Insert new record
+    
+    # Check if file hash changed (file content changed)
+    technical_metadata = existing_record.get('technical_metadata', {})
+    if isinstance(technical_metadata, str):
+        try:
+            technical_metadata = json.loads(technical_metadata)
+        except:
+            technical_metadata = {}
+    
+    existing_file_hash = None
+    existing_schema_hash = None
+    
+    # Try to get file hash from various locations
+    if 'file_hash' in technical_metadata:
+        existing_file_hash = technical_metadata['file_hash']
+    elif 'file_metadata' in technical_metadata and 'hash' in technical_metadata['file_metadata']:
+        existing_file_hash = technical_metadata['file_metadata']['hash'].get('value')
+    
+    # Try to get schema hash
+    if 'schema_hash' in technical_metadata:
+        existing_schema_hash = technical_metadata['schema_hash']
+    
+    # File hash changed means file content changed
+    file_changed = existing_file_hash != file_hash
+    
+    # Schema hash changed means schema changed
+    schema_changed = existing_schema_hash != schema_hash
+    
+    # Update if file or schema changed
+    should_update = file_changed or schema_changed
+    
+    return (should_update, schema_changed)

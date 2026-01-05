@@ -534,11 +534,22 @@ const ConnectorsPage = () => {
                             skip_deduplication: true,  // Skip deduplication for test discoveries
                           }),
                         })
-                        .then(res => {
+                        .then(async res => {
                           if (!res.ok) {
-                            return res.json().then(err => Promise.reject(new Error(err.error || `HTTP ${res.status}: ${res.statusText}`)));
-                    }
-                          return res.json();
+                            let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
+                            try {
+                              const errorData = await res.json();
+                              errorMessage = errorData.error || errorMessage;
+                            } catch (e) {
+                              // If response is not JSON, use status text
+                            }
+                            return Promise.reject(new Error(errorMessage));
+                          }
+                          try {
+                            return await res.json();
+                          } catch (e) {
+                            return Promise.reject(new Error('Invalid JSON response from server'));
+                          }
                         })
                         .then(discoveryResult => {
                           const saved = discoveryResult.created_count || discoveryResult.discovered_count || 0;
@@ -575,18 +586,32 @@ const ConnectorsPage = () => {
                           setTesting(false);
                         })
                         .catch(err => {
-                          setDiscoveryProgress(prev => [...prev, `Error saving assets: ${err.message}`]);
+                          const errorMessage = err instanceof Error ? err.message : String(err || 'Unknown error');
+                          setDiscoveryProgress(prev => [...prev, `Error saving assets: ${errorMessage}`]);
                           const actualContainerCount = actualContainersProcessed.size || 1;
-                setTestResult({
-                  success: true,
-                            message: `Connection successful! Found ${totalDiscovered} files but error saving: ${err.message}`,
+                          setTestResult({
+                            success: true,
+                            message: `Connection successful! Found ${totalDiscovered} files but error saving: ${errorMessage}`,
                             discoveredAssets: 0,
                             totalContainers: actualContainerCount,
-                  connectionId: connection.id,
-                  containers: containersData.containers || [],
-                });
+                            connectionId: connection.id,
+                            containers: containersData.containers || [],
+                          });
                           
                           // Set testing to false even on error
+                          setTesting(false);
+                        })
+                        .catch(finalError => {
+                          // Final catch for any unhandled errors in the promise chain
+                          const errorMessage = finalError instanceof Error ? finalError.message : String(finalError || 'Unknown error');
+                          console.error('Unhandled error in discovery process:', finalError);
+                          setDiscoveryProgress(prev => [...prev, `Unexpected error: ${errorMessage}`]);
+                          setTestResult({
+                            success: false,
+                            message: `Error during discovery: ${errorMessage}`,
+                            discoveredAssets: 0,
+                            totalContainers: 0,
+                          });
                           setTesting(false);
                         });
                       } else if (data.type === 'error') {

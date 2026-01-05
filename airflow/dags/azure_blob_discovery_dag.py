@@ -30,7 +30,8 @@ from config.azure_config import (
 from utils.azure_blob_client import AzureBlobClient, create_azure_blob_client
 from utils.metadata_extractor import extract_file_metadata, generate_file_hash, generate_schema_hash
 from utils.deduplication import check_file_exists, check_asset_exists, should_update_or_insert, get_db_connection
-from utils.email_notifier import notify_new_discoveries
+# Email notifications disabled - function not implemented
+# from utils.email_notifier import notify_new_discoveries
 
 logger = logging.getLogger(__name__)
 

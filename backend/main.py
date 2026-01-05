@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 from config import config
-from database import engine, Base, SessionLocal
+from database import engine, Base, SessionLocal, get_db_session
 from models import Asset, Connection, LineageRelationship, LineageHistory, SQLQuery, DataDiscovery
 import logging
 from logging.handlers import RotatingFileHandler
@@ -87,7 +87,8 @@ try:
     from utils.asset_deduplication import check_asset_exists, should_update_or_insert
     from utils.sql_lineage_extractor import extract_lineage_from_sql, get_lineage_extractor
     from utils.ml_lineage_inference import infer_relationships_ml, fuzzy_column_match
-    from utils.data_quality_integration import calculate_asset_quality_score, propagate_quality_through_lineage
+    # Data quality integration removed - data quality detection has been removed
+    # from utils.data_quality_integration import calculate_asset_quality_score, propagate_quality_through_lineage
     AZURE_AVAILABLE = True
     logger.info('FN:__init__ message:Azure utilities loaded successfully')
 except ImportError as e:
@@ -383,33 +384,7 @@ def delete_connection(connection_id):
     finally:
         db.close()
 
-@app.route('/api/assets/<asset_id>/quality', methods=['GET'])
-@handle_error
-def get_asset_quality(asset_id):
-    db = SessionLocal()
-    try:
-        asset = db.query(Asset).filter(Asset.id == asset_id).first()
-        if not asset:
-            return jsonify({"error": "Asset not found"}), 404
-        
-        asset_dict = {
-            'id': asset.id,
-            'name': asset.name,
-            'columns': asset.columns,
-            'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
-            'technical_metadata': asset.technical_metadata,
-            'operational_metadata': asset.operational_metadata
-        }
-        
-        quality = calculate_asset_quality_score(asset_dict)
-        
-        return jsonify({
-            'asset_id': asset_id,
-            'asset_name': asset.name,
-            **quality
-        }), 200
-    finally:
-        db.close()
+# Quality score endpoint removed - data quality detection has been removed
 
 @app.route('/api/assets', methods=['GET'])
 @handle_error
@@ -429,48 +404,8 @@ def get_assets():
                 if not asset:
                     return jsonify({"error": "Asset not found for this discovery_id"}), 404
                 
-                # OPTIMIZED: Only calculate quality score if not cached
+                # Quality score calculation removed - data quality detection has been removed
                 operational_metadata = asset.operational_metadata or {}
-                columns_list = asset.columns or []
-                columns_hash = str(hash(str(columns_list))) if columns_list else None
-                
-                cached_score = operational_metadata.get('data_quality_score')
-                cached_columns_hash = operational_metadata.get('quality_columns_hash')
-                needs_recalculation = (
-                    cached_score is None or 
-                    cached_columns_hash != columns_hash or
-                    not operational_metadata.get('quality_metrics')
-                )
-                
-                if needs_recalculation and columns_list and len(columns_list) > 0:
-                    try:
-                        asset_dict = {
-                            'id': asset.id,
-                            'name': asset.name,
-                            'columns': columns_list,
-                            'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
-                            'technical_metadata': asset.technical_metadata or {},
-                            'operational_metadata': operational_metadata
-                        }
-                        quality_result = calculate_asset_quality_score(asset_dict)
-                        calculated_score = quality_result.get('quality_score', 0.0)
-                        quality_score = int(round(calculated_score * 100))
-                        if quality_score == 0:
-                            quality_score = 50
-                        
-                        operational_metadata['data_quality_score'] = quality_score
-                        operational_metadata['quality_metrics'] = quality_result.get('quality_metrics', {})
-                        operational_metadata['quality_issues'] = quality_result.get('quality_issues', [])
-                        operational_metadata['quality_columns_hash'] = columns_hash
-                    except Exception as e:
-                        logger.warning('FN:get_assets discovery_id:{} asset_id:{} error:{}'.format(discovery.id, asset.id, str(e)))
-                        quality_score = 75 if columns_list else 0
-                        operational_metadata['data_quality_score'] = quality_score
-                elif cached_score is not None:
-                    quality_score = cached_score
-                else:
-                    quality_score = 0
-                    operational_metadata['data_quality_score'] = quality_score
                 
                 asset_data = {
                     "id": asset.id,
@@ -542,65 +477,8 @@ def get_assets():
                 continue
             seen_asset_ids.add(asset.id)
             
-            # OPTIMIZED: Only calculate quality score if not cached or if columns changed
+            # Quality score calculation removed - data quality detection has been removed
             operational_metadata = asset.operational_metadata or {}
-            columns_list = asset.columns or []
-            columns_hash = str(hash(str(columns_list))) if columns_list else None
-            
-            # Check if we need to recalculate (score missing or columns changed)
-            cached_score = operational_metadata.get('data_quality_score')
-            cached_columns_hash = operational_metadata.get('quality_columns_hash')
-            needs_recalculation = (
-                cached_score is None or 
-                cached_columns_hash != columns_hash or
-                not operational_metadata.get('quality_metrics')
-            )
-            
-            if needs_recalculation and columns_list and len(columns_list) > 0:
-                try:
-                    asset_dict = {
-                        'id': asset.id,
-                        'name': asset.name,
-                        'columns': columns_list,
-                        'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
-                        'technical_metadata': asset.technical_metadata or {},
-                        'operational_metadata': operational_metadata
-                    }
-                    quality_result = calculate_asset_quality_score(asset_dict)
-                    calculated_score = quality_result.get('quality_score', 0.0)
-                    quality_score = int(round(calculated_score * 100))  # Convert to percentage
-                    # Ensure minimum score of 50 if columns exist
-                    if quality_score == 0:
-                        quality_score = 50
-                    
-                    # Store score and metrics for tooltip
-                    operational_metadata['data_quality_score'] = quality_score
-                    operational_metadata['quality_metrics'] = quality_result.get('quality_metrics', {})
-                    operational_metadata['quality_issues'] = quality_result.get('quality_issues', [])
-                    operational_metadata['quality_columns_hash'] = columns_hash
-                    
-                    # Save to database if score was recalculated
-                    if needs_recalculation:
-                        asset.operational_metadata = operational_metadata
-                        flag_modified(asset, "operational_metadata")
-                        db.commit()
-                        db.refresh(asset)
-                    
-                    logger.debug('FN:get_assets asset_id:{} columns_count:{} calculated_score:{} quality_score:{}'.format(
-                        asset.id, len(columns_list), calculated_score, quality_score
-                    ))
-                except Exception as e:
-                    logger.warning('FN:get_assets asset_id:{} error_calculating_quality:{}'.format(asset.id, str(e)), exc_info=True)
-                    # Default to 75 if calculation fails but asset has columns
-                    quality_score = 75 if columns_list else 0
-                    operational_metadata['data_quality_score'] = quality_score
-            elif cached_score is not None:
-                # Use cached score
-                quality_score = cached_score
-            else:
-                # No columns - set to 0
-                quality_score = 0
-                operational_metadata['data_quality_score'] = quality_score
             
             asset_data = {
             "id": asset.id,
@@ -708,7 +586,7 @@ def get_discovery_by_id(discovery_id):
             "created_at": format_rfc2822(discovery.created_at),
             "created_by": discovery.created_by or "api_trigger",
             "data_publishing_id": discovery.data_publishing_id,
-            "data_quality_score": float(discovery.data_quality_score) if discovery.data_quality_score else None,
+            # data_quality_score removed - data quality detection has been removed
             "data_source_type": discovery.data_source_type or file_basic.get("format", ""),
             "deleted_at": format_rfc2822(discovery.deleted_at),
             "discovered_at": format_rfc2822(discovery.discovered_at),
@@ -1188,55 +1066,8 @@ def get_asset_by_id(asset_id):
             DataDiscovery.asset_id == asset_id
         ).order_by(DataDiscovery.id.desc()).first()
         
-        # OPTIMIZED: Only calculate quality score if not cached
+        # Quality score calculation removed - data quality detection has been removed
         operational_metadata = asset.operational_metadata or {}
-        columns_list = asset.columns or []
-        columns_hash = str(hash(str(columns_list))) if columns_list else None
-        
-        cached_score = operational_metadata.get('data_quality_score')
-        cached_columns_hash = operational_metadata.get('quality_columns_hash')
-        needs_recalculation = (
-            cached_score is None or 
-            cached_columns_hash != columns_hash or
-            not operational_metadata.get('quality_metrics')
-        )
-        
-        if needs_recalculation and columns_list and len(columns_list) > 0:
-            try:
-                asset_dict = {
-                    'id': asset.id,
-                    'name': asset.name,
-                    'columns': columns_list,
-                    'last_modified': asset.discovered_at.isoformat() if asset.discovered_at else None,
-                    'technical_metadata': asset.technical_metadata or {},
-                    'operational_metadata': operational_metadata
-                }
-                quality_result = calculate_asset_quality_score(asset_dict)
-                calculated_score = quality_result.get('quality_score', 0.0)
-                quality_score = int(round(calculated_score * 100))
-                if quality_score == 0:
-                    quality_score = 50
-                
-                operational_metadata['data_quality_score'] = quality_score
-                operational_metadata['quality_metrics'] = quality_result.get('quality_metrics', {})
-                operational_metadata['quality_issues'] = quality_result.get('quality_issues', [])
-                operational_metadata['quality_columns_hash'] = columns_hash
-                
-                # Save to database if score was recalculated
-                if needs_recalculation:
-                    asset.operational_metadata = operational_metadata
-                    flag_modified(asset, "operational_metadata")
-                    db.commit()
-                    db.refresh(asset)
-            except Exception as e:
-                logger.warning('FN:get_asset_by_id asset_id:{} error:{}'.format(asset_id, str(e)))
-                quality_score = 75 if columns_list else 0
-                operational_metadata['data_quality_score'] = quality_score
-        elif cached_score is not None:
-            quality_score = cached_score
-        else:
-            quality_score = 0
-            operational_metadata['data_quality_score'] = quality_score
         
         result = {
             "id": asset.id,
@@ -1269,7 +1100,7 @@ def get_asset_by_id(asset_id):
             result["storage_metadata"] = discovery.storage_metadata
             result["storage_data_metadata"] = discovery.storage_data_metadata
             result["additional_metadata"] = discovery.additional_metadata
-            result["data_quality_score"] = float(discovery.data_quality_score) if discovery.data_quality_score else None
+            # data_quality_score removed - data quality detection has been removed
             result["validation_status"] = discovery.validation_status
             result["validated_at"] = discovery.validated_at.isoformat() if discovery.validated_at else None
         
@@ -1307,11 +1138,29 @@ def update_column_pii(asset_id, column_name):
                     # If marking as PII, use provided types or default to ['PII']
                     col['pii_types'] = data.get('pii_types', ['PII'])
                     # Store masking logic for analytical and operational users
-                    # Always save masking logic if provided, even if updating existing PII column
+                    # Always save masking logic when provided in request (even if empty string)
+                    # Convert empty/whitespace strings to None for consistency
                     if 'masking_logic_analytical' in data:
-                        col['masking_logic_analytical'] = data.get('masking_logic_analytical')
+                        masking_analytical = data.get('masking_logic_analytical')
+                        if isinstance(masking_analytical, str):
+                            col['masking_logic_analytical'] = masking_analytical.strip() if masking_analytical.strip() else None
+                        else:
+                            col['masking_logic_analytical'] = masking_analytical
+                    else:
+                        # If not provided and column was non-PII, initialize to None
+                        if 'masking_logic_analytical' not in col:
+                            col['masking_logic_analytical'] = None
+                    
                     if 'masking_logic_operational' in data:
-                        col['masking_logic_operational'] = data.get('masking_logic_operational')
+                        masking_operational = data.get('masking_logic_operational')
+                        if isinstance(masking_operational, str):
+                            col['masking_logic_operational'] = masking_operational.strip() if masking_operational.strip() else None
+                        else:
+                            col['masking_logic_operational'] = masking_operational
+                    else:
+                        # If not provided and column was non-PII, initialize to None
+                        if 'masking_logic_operational' not in col:
+                            col['masking_logic_operational'] = None
                 else:
                     # If marking as non-PII, clear the types and masking logic
                     col['pii_types'] = None
@@ -1328,13 +1177,17 @@ def update_column_pii(asset_id, column_name):
         db.commit()
         db.refresh(asset)
 
-        # Log masking logic save for debugging
+        # Log masking logic save for debugging - show what was received vs what was saved
         updated_col = next((col for col in columns if col.get('name') == column_name), None)
         masking_analytical = updated_col.get('masking_logic_analytical') if updated_col else None
         masking_operational = updated_col.get('masking_logic_operational') if updated_col else None
         
-        logger.info('FN:update_column_pii asset_id:{} column_name:{} pii_detected:{} masking_analytical:{} masking_operational:{}'.format(
-            asset_id, column_name, data.get('pii_detected'), masking_analytical, masking_operational
+        received_analytical = data.get('masking_logic_analytical')
+        received_operational = data.get('masking_logic_operational')
+        
+        logger.info('FN:update_column_pii asset_id:{} column_name:{} pii_detected:{} received_analytical:{} received_operational:{} saved_analytical:{} saved_operational:{}'.format(
+            asset_id, column_name, data.get('pii_detected'), 
+            received_analytical, received_operational, masking_analytical, masking_operational
         ))
 
         updated_column = next((col for col in columns if col.get('name') == column_name), None)
@@ -2395,8 +2248,8 @@ def discover_assets(connection_id):
                                 asset_name = parts[-1]
                             
 
-                            thread_db = SessionLocal()
-                            try:
+                            # OPTIMIZATION: Use context manager to ensure proper session cleanup and prevent connection pool exhaustion
+                            with get_db_session() as thread_db:
 
 
                                 existing_asset = None
@@ -2477,11 +2330,63 @@ def discover_assets(connection_id):
                                 file_sample = None
                                 try:
                                     if file_extension == "parquet":
-                                        # SMART APPROACH: Download footer (256KB default, or exact size if smaller)
-                                        # Reads footer length from last 8 bytes to get exact footer size
-                                        # This ensures COMPLETE schema extraction even for files with 100+ columns
-                                        # For 4,000 files: ~1GB vs 40GB with full download
-                                        file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                        # OPTIMIZED APPROACH: Different strategy based on file size
+                                        # Get file size first to determine optimal download strategy
+                                        try:
+                                            file_properties = blob_client.get_blob_properties(container_name, blob_path)
+                                            file_size = file_properties.get("size", 0)
+                                            optimized_threshold = 5 * 1024 * 1024  # 5MB - use optimized approach for files > 5MB
+                                            
+                                            if file_size > optimized_threshold:
+                                                # MEDIUM/LARGE FILES (>5MB): Download footer + first row group separately
+                                                # This is efficient: footer (256KB-2MB) + first row group (2MB) = ~2-4MB total
+                                                # vs downloading first 5MB (which doesn't include footer) = incomplete schema
+                                                # vs downloading full file (5MB-500MB) = wasteful bandwidth
+                                                logger.debug('FN:discover_assets blob_path:{} file_size:{} message:Using optimized strategy (footer + row group) for file > 5MB'.format(blob_path, file_size))
+                                                file_sample = blob_client.get_parquet_footer_and_row_group(container_name, blob_path, footer_size_kb=256, row_group_size_mb=2)
+                                                
+                                                # Fallback to footer-only if combined download fails
+                                                if not file_sample or len(file_sample) < 1000:
+                                                    logger.debug('FN:discover_assets blob_path:{} message:Fallback to footer-only for optimized download'.format(blob_path))
+                                                    file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                            else:
+                                                # SMALL FILES (<5MB): Download full file
+                                                # For files 5KB-5MB, downloading full file is efficient and gives complete data
+                                                # This enables PII detection with actual data samples (20 rows)
+                                                # Full file download ensures we get both footer (schema) and row groups (PII data)
+                                                logger.debug('FN:discover_assets blob_path:{} file_size:{} message:Using full file download for small file (<5MB)'.format(blob_path, file_size))
+                                                file_sample = blob_client.get_parquet_file_for_extraction(container_name, blob_path, max_size_mb=5)
+                                                
+                                                # Fallback to footer-only if download fails
+                                                if not file_sample or len(file_sample) < 1000:
+                                                    logger.debug('FN:discover_assets blob_path:{} message:Fallback to footer-only download'.format(blob_path))
+                                                    file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                        except Exception as e:
+                                            # If we can't get file size, use default approach
+                                            logger.warning('FN:discover_assets blob_path:{} message:Could not get file size, using default approach error:{}'.format(blob_path, str(e)))
+                                            file_sample = blob_client.get_parquet_file_for_extraction(container_name, blob_path, max_size_mb=5)
+                                            
+                                            # Validate: Check if PAR1 magic exists (footer is present)
+                                            # If first 5MB doesn't have footer, file is likely > 5MB, use footer-only approach
+                                            if file_sample and len(file_sample) >= 1000:
+                                                # Check if footer (PAR1 magic) is present
+                                                # Footer is at the end of parquet files, so check last 4 bytes
+                                                if len(file_sample) < 4 or file_sample[-4:] != b'PAR1':
+                                                    # No footer in first 5MB - file is likely > 5MB
+                                                    # Use optimized approach (footer + row group) instead
+                                                    logger.debug('FN:discover_assets blob_path:{} message:No PAR1 magic in first 5MB, using optimized approach (footer + row group)'.format(blob_path))
+                                                    file_sample = blob_client.get_parquet_footer_and_row_group(container_name, blob_path, footer_size_kb=256, row_group_size_mb=2)
+                                                    
+                                                    # Final fallback to footer-only if combined download fails
+                                                    if not file_sample or len(file_sample) < 1000:
+                                                        logger.debug('FN:discover_assets blob_path:{} message:Fallback to footer-only download'.format(blob_path))
+                                                        file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                                # else: PAR1 magic found, file_sample is valid (full file or has footer)
+                                            
+                                            # Fallback to footer-only if download fails
+                                            if not file_sample or len(file_sample) < 1000:
+                                                logger.debug('FN:discover_assets blob_path:{} message:Fallback to footer-only download'.format(blob_path))
+                                                file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
                                     elif file_extension in ["csv", "json"]:
 
                                         file_sample = blob_client.get_blob_sample(container_name, blob_path, max_bytes=8192)
@@ -2532,7 +2437,7 @@ def discover_assets(connection_id):
                                         }
                                         thread_db.commit()
                                         thread_db.refresh(existing_asset)
-                                        thread_db.close()
+                                        # Context manager handles session cleanup
                                         return {
                                             "action": "pii_updated",
                                             "asset": existing_asset,
@@ -2594,8 +2499,8 @@ def discover_assets(connection_id):
                                         "asset": existing_asset,
                                         "name": asset_name,
                                         "folder": asset_folder,
-                                        "container": container_name,
-                                        "thread_db": thread_db
+                                        "container": container_name
+                                        # Note: thread_db not returned - context manager handles cleanup
                                     }
                                 else:
 
@@ -2634,9 +2539,8 @@ def discover_assets(connection_id):
 
                                     schema_json_full = clean_for_json(metadata.get("schema_json", {}))
                                     
-                                    # IMPORTANT: close the thread DB session for created assets to avoid connection leaks
-                                    # (main thread will create/save the Asset using its own session)
-                                    thread_db.close()
+                                    # IMPORTANT: For created assets, don't commit here - main thread will create/save the Asset
+                                    # Context manager will handle session cleanup
                                     return {
                                         "action": "created",
                                         "asset_data": {
@@ -2660,13 +2564,9 @@ def discover_assets(connection_id):
                                         "connection_id": connection_id,
                                         "connection_name": connection.name,
                                     }
-                            except Exception as e:
-                                thread_db.close()
-                                raise e
                         except Exception as e:
                             logger.error('FN:discover_assets container_name:{} blob_name:{} error:{}'.format(container_name, blob_info.get('name', 'unknown'), str(e)), exc_info=True)
-                            if 'thread_db' in locals():
-                                thread_db.close()
+                            # Context manager handles cleanup on exception
                             return None
                     
 
@@ -2783,25 +2683,9 @@ def discover_assets(connection_id):
                             skipped_count += 1
                             continue
                         elif item.get("action") == "updated":
-
-                            # OPTIMIZED: Merge updated assets into main session instead of individual commits
-                            thread_db = item.get("thread_db")
-                            if thread_db:
-                                try:
-                                    updated_asset = item.get("asset")
-                                    if updated_asset:
-                                        # Merge the object from thread_db into main db session
-                                        # This avoids individual commits and allows batch processing
-                                        db.merge(updated_asset)
-                                    updated_count += 1
-                                except Exception as e:
-                                    logger.error('FN:discover_assets message:Error merging updated asset error:{}'.format(str(e)), exc_info=True)
-                                    skipped_count += 1
-                                finally:
-                                    thread_db.close()
-                            else:
-
-                                updated_count += 1
+                            # Asset was already committed in the worker thread via context manager
+                            # No need to merge - asset is already saved to database
+                            updated_count += 1
                         elif item.get("action") == "created":
 
                             asset_data = item["asset_data"]
@@ -3626,42 +3510,28 @@ def get_lineage_relationships():
         
         result = []
         
+        # OPTIMIZATION: Collect all asset IDs first to avoid N+1 queries
+        asset_ids = set()
         for rel in relationships:
-
-            source_asset = db.query(Asset).filter(Asset.id == rel.source_asset_id).first()
-            target_asset = db.query(Asset).filter(Asset.id == rel.target_asset_id).first()
+            asset_ids.add(rel.source_asset_id)
+            asset_ids.add(rel.target_asset_id)
+        
+        # Single query to fetch all assets
+        assets_map = {}
+        if asset_ids:
+            assets = db.query(Asset).filter(Asset.id.in_(list(asset_ids))).all()
+            assets_map = {asset.id: asset for asset in assets}
+        
+        # OPTIMIZATION: Remove quality score calculation from loop - use cached values from operational_metadata
+        # Quality scores should be pre-calculated and stored, not calculated on-the-fly
+        for rel in relationships:
+            source_asset = assets_map.get(rel.source_asset_id)
+            target_asset = assets_map.get(rel.target_asset_id)
             
 
-            source_quality = None
-            target_quality = None
-            if source_asset:
-                source_asset_dict = {
-                    'id': source_asset.id,
-                    'columns': source_asset.columns,
-                    'last_modified': source_asset.discovered_at.isoformat() if source_asset.discovered_at else None
-                }
-                source_quality = calculate_asset_quality_score(source_asset_dict)
-            
-            if target_asset:
-                target_asset_dict = {
-                    'id': target_asset.id,
-                    'columns': target_asset.columns,
-                    'last_modified': target_asset.discovered_at.isoformat() if target_asset.discovered_at else None
-                }
-                target_quality = calculate_asset_quality_score(target_asset_dict)
-            
-
+            # Quality score information removed - data quality detection has been removed
             column_lineage = rel.column_lineage or []
-            end_to_end_lineage = []
-            
-
-            for col_rel in column_lineage:
-                enhanced_col = {
-                    **col_rel,
-                    'source_quality': source_quality.get('quality_score') if source_quality else None,
-                    'target_quality': target_quality.get('quality_score') if target_quality else None
-                }
-                end_to_end_lineage.append(enhanced_col)
+            end_to_end_lineage = column_lineage
             
             rel_data = {
                 "id": rel.id,
@@ -3679,22 +3549,9 @@ def get_lineage_relationships():
                 "confidence_score": float(rel.confidence_score) if rel.confidence_score else None,
                 "extraction_method": rel.extraction_method,
                 "created_at": rel.created_at.isoformat() if rel.created_at else None,
-                "discovered_at": rel.discovered_at.isoformat() if rel.discovered_at else None,
-                "source_quality": source_quality,
-                "target_quality": target_quality
+                "discovered_at": rel.discovered_at.isoformat() if rel.discovered_at else None
+                # Quality information removed - data quality detection has been removed
             }
-            
-
-            if source_quality and target_quality:
-                relationship_dict = {
-                    'transformation_type': rel.transformation_type or 'pass_through'
-                }
-                quality_propagation = propagate_quality_through_lineage(
-                    source_quality,
-                    target_quality,
-                    relationship_dict
-                )
-                rel_data['quality_propagation'] = quality_propagation
             
             result.append(rel_data)
         

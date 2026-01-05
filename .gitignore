@@ -47,3 +47,4 @@ Thumbs.db
 # Cache
 .cache/
 .parcel-cache/
+frontend/.env.backup

@@ -250,7 +250,7 @@ const AssetsPage = () => {
     fetchAssets();
   }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter, approvalStatusFilter, applicationNameFilter]);
 
-  const fetchAssets = async (pageOverride = null) => {
+  const fetchAssets = async (pageOverride = null, returnFiltered = false) => {
       setLoading(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -317,25 +317,36 @@ const AssetsPage = () => {
         }
         
         setAssets(filtered);
+        
+        // Return filtered count if requested (for checking empty pages)
+        if (returnFiltered) {
+          return filtered.length;
+        }
         } else {
         setAssets([]);
         setTotalAssets(0);
         setTotalPages(0);
+        if (returnFiltered) {
+          return 0;
+        }
       }
     } catch (error) {
       console.error('Error fetching assets:', error);
       setAssets([]);
       setTotalAssets(0);
       setTotalPages(0);
+      if (returnFiltered) {
+        return 0;
+      }
     } finally {
       setLoading(false);
     }
   };
 
   
-  const uniqueTypes = [...new Set(allAssets.map(asset => asset.type))];
-  const uniqueCatalogs = [...new Set(allAssets.map(asset => asset.catalog))];
-  const uniqueApplicationNames = [...new Set(allAssets.map(asset => asset.business_metadata?.application_name).filter(Boolean))];
+  const uniqueTypes = allAssets ? [...new Set(allAssets.map(asset => asset.type))] : [];
+  const uniqueCatalogs = allAssets ? [...new Set(allAssets.map(asset => asset.catalog))] : [];
+  const uniqueApplicationNames = allAssets ? [...new Set(allAssets.map(asset => asset.business_metadata?.application_name).filter(Boolean))] : [];
 
   const getDataSource = (connectorId) => {
     if (!connectorId) return 'Unknown';
@@ -367,6 +378,9 @@ const AssetsPage = () => {
   const handleApproveAsset = async (assetId) => {
     
     const asset = allAssets.find(a => a.id === assetId);
+    // Store original state for rollback
+    const originalAsset = asset ? { ...asset } : null;
+    
     if (asset) {
       const updatedAsset = {
         ...asset,
@@ -396,62 +410,38 @@ const AssetsPage = () => {
       if (response.ok) {
         const result = await response.json();
         
-        const updatedAssetFromServer = {
-          ...asset,
-          ...result,
-          operational_metadata: {
-            ...(asset?.operational_metadata || {}),
-            ...(result.operational_metadata || {}),
-            approval_status: 'approved',
-            approved_at: result.updated_at || result.operational_metadata?.approved_at || new Date().toISOString()
-          }
-        };
-        
         if (import.meta.env.DEV) {
-          console.log('Server response - Updated asset:', assetId, updatedAssetFromServer.operational_metadata);
+          console.log('Server response - Asset approved:', assetId, result);
         }
         
+        // Refetch assets from server to ensure consistency
+        // This ensures the current page still has items after approval
+        // If the approved asset is filtered out, we'll get the correct page data
+        const filteredCount = await fetchAssets(null, true);
         
-        const updatedAllAssets = allAssets.map(a => a.id === assetId ? updatedAssetFromServer : a);
-        setAllAssets(updatedAllAssets);
-        
-        
-        let filtered = updatedAllAssets;
-        if (searchTerm) {
-          filtered = filtered.filter(a => 
-            a.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (a.catalog && a.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
-          );
+        // If current page is empty after filtering and we're not on page 0, go to previous page
+        if (filteredCount === 0 && currentPage > 0) {
+          const newPage = Math.max(0, currentPage - 1);
+          setCurrentPage(newPage);
+          await fetchAssets(newPage);
         }
-        if (typeFilter.length > 0) {
-          filtered = filtered.filter(a => typeFilter.includes(a.type));
-        }
-        if (catalogFilter.length > 0) {
-          filtered = filtered.filter(a => catalogFilter.includes(a.catalog));
-        }
-        if (approvalStatusFilter.length > 0) {
-          filtered = filtered.filter(a => {
-            const status = a.operational_metadata?.approval_status || 'pending_review';
-            return approvalStatusFilter.includes(status);
-          });
-        }
-        if (applicationNameFilter.length > 0) {
-          filtered = filtered.filter(a => {
-            const appName = a.business_metadata?.application_name || '';
-            return applicationNameFilter.includes(appName);
-          });
-        }
-        const page = currentPage;
-        const start = page * pageSize;
-        const end = start + pageSize;
-        setAssets(filtered.slice(start, end));
       } else {
+        // Rollback optimistic update on error
+        if (originalAsset) {
+          setAllAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+          setAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+        }
         
         await fetchAssets();
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to approve asset');
       }
     } catch (error) {
+      // Rollback optimistic update on error
+      if (originalAsset) {
+        setAllAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+        setAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+      }
       
       await fetchAssets();
       if (import.meta.env.DEV) {
@@ -496,16 +486,25 @@ const AssetsPage = () => {
     
     const asset = allAssets.find(a => a.id === assetToReject);
     
+    // Validate asset exists before proceeding
+    if (!asset) {
+      alert('Asset not found. Please refresh the page and try again.');
+      return;
+    }
+    
     // Add rejection reason as a short table tag (1-2 words)
     const shortTag = getRejectionTag(selectedRejectReason, customRejectReason);
     const rejectionTag = `REJECTED: ${shortTag}`;
-    const existingTags = asset?.business_metadata?.tags || [];
+    const existingTags = asset.business_metadata?.tags || [];
     
     // Remove any existing REJECTED tag, filter out "torrocon", and add the new one
     const filteredTags = existingTags
       .filter(tag => !tag.startsWith('REJECTED:') && tag.toLowerCase() !== 'torrocon')
       .filter(tag => tag.trim() !== ''); // Also filter out empty tags
     filteredTags.push(rejectionTag);
+    
+    // Store original state for rollback
+    const originalAsset = { ...asset };
     
     if (asset) {
       const updatedAsset = {
@@ -538,6 +537,10 @@ const AssetsPage = () => {
       });
       
       if (!rejectResponse.ok) {
+        // Rollback optimistic update on error
+        setAllAssets(prev => prev.map(a => a.id === assetToReject ? originalAsset : a));
+        setAssets(prev => prev.map(a => a.id === assetToReject ? originalAsset : a));
+        
         const errorData = await rejectResponse.json();
         throw new Error(errorData.error || 'Failed to reject asset');
       }
@@ -557,14 +560,36 @@ const AssetsPage = () => {
       });
       
       if (updateResponse.ok) {
-        await fetchAssets();
+        const filteredCount = await fetchAssets(null, true);
+        
+        // If current page is empty after filtering and we're not on page 0, go to previous page
+        if (filteredCount === 0 && currentPage > 0) {
+          const newPage = Math.max(0, currentPage - 1);
+          setCurrentPage(newPage);
+          await fetchAssets(newPage);
+        }
       } else {
+        // Rollback optimistic update on error
+        setAllAssets(prev => prev.map(a => a.id === assetToReject ? originalAsset : a));
+        setAssets(prev => prev.map(a => a.id === assetToReject ? originalAsset : a));
+        
         await fetchAssets();
         const errorData = await updateResponse.json();
         throw new Error(errorData.error || 'Failed to update tags');
       }
     } catch (error) {
-      await fetchAssets();
+      // Rollback optimistic update on error
+      setAllAssets(prev => prev.map(a => a.id === assetToReject ? originalAsset : a));
+      setAssets(prev => prev.map(a => a.id === assetToReject ? originalAsset : a));
+      
+      const filteredCount = await fetchAssets(null, true);
+      
+      // If current page is empty after filtering and we're not on page 0, go to previous page
+      if (filteredCount === 0 && currentPage > 0) {
+        const newPage = Math.max(0, currentPage - 1);
+        setCurrentPage(newPage);
+        await fetchAssets(newPage);
+      }
       if (import.meta.env.DEV) {
         console.error('Error rejecting asset:', error);
       }
@@ -586,6 +611,9 @@ const AssetsPage = () => {
 
     // Show loader
     setPublishing(true);
+
+    // Store original state for rollback
+    const originalAsset = { ...asset };
 
     const updatedAsset = {
       ...asset,
@@ -614,6 +642,9 @@ const AssetsPage = () => {
         const discoveryId = result.discovery_id;
         
         if (!discoveryId) {
+          // Rollback optimistic update on error
+          setAllAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+          setAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
           setPublishing(false);
           throw new Error('Discovery ID not returned from publish endpoint');
         }
@@ -626,6 +657,9 @@ const AssetsPage = () => {
         });
         
         if (!discoveryResponse.ok) {
+          // Rollback optimistic update on error
+          setAllAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+          setAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
           setPublishing(false);
           throw new Error('Failed to fetch discovery details');
         }
@@ -637,20 +671,49 @@ const AssetsPage = () => {
           console.log('Discovery data keys:', Object.keys(discoveryData));
         }
         
-        await fetchAssets();
+        const filteredCount = await fetchAssets(null, true);
+        
+        // Check if page is empty before navigation (in case navigation fails)
+        if (filteredCount === 0 && currentPage > 0) {
+          const newPage = Math.max(0, currentPage - 1);
+          setCurrentPage(newPage);
+          await fetchAssets(newPage);
+        }
         
         // Navigate directly to /app/dataOnboarding without /airflow-fe prefix
         // Keep loader visible until navigation completes
         window.location.href = `/app/dataOnboarding?id=${discoveryId}`;
       } else {
+        // Rollback optimistic update on error
+        setAllAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+        setAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+        
         setPublishing(false);
-        await fetchAssets();
+        const filteredCount = await fetchAssets(null, true);
+        
+        // If current page is empty after filtering and we're not on page 0, go to previous page
+        if (filteredCount === 0 && currentPage > 0) {
+          const newPage = Math.max(0, currentPage - 1);
+          setCurrentPage(newPage);
+          await fetchAssets(newPage);
+        }
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to publish asset');
       }
     } catch (error) {
+      // Rollback optimistic update on error
+      setAllAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+      setAssets(prev => prev.map(a => a.id === assetId ? originalAsset : a));
+      
       setPublishing(false);
-      await fetchAssets();
+      const filteredCount = await fetchAssets(null, true);
+      
+      // If current page is empty after filtering and we're not on page 0, go to previous page
+      if (filteredCount === 0 && currentPage > 0) {
+        const newPage = Math.max(0, currentPage - 1);
+        setCurrentPage(newPage);
+        await fetchAssets(newPage);
+      }
       if (import.meta.env.DEV) {
         console.error('Error publishing asset:', error);
       }
@@ -1326,9 +1389,16 @@ const AssetsPage = () => {
                   console.warn('Airflow DAG trigger failed (non-critical):', error);
                 }
                 
+                // Wait a moment for discovery to process and save to database
+                // This ensures new assets are available when we fetch
+                await new Promise(resolve => setTimeout(resolve, 2000));
                 
-                // Force refresh - reset page and fetch with cache busting
+                // Force refresh - fetch fresh data with cache busting
+                // Store current page before resetting (for potential navigation back)
+                const previousPage = currentPage;
+                // Reset to first page for refresh
                 setCurrentPage(0);
+                
                 // Force a fresh fetch by adding timestamp to URL
                 const timestamp = new Date().getTime();
                 const url = `${API_BASE_URL}/api/assets?page=1&per_page=${pageSize}&_t=${timestamp}`;
@@ -1341,7 +1411,7 @@ const AssetsPage = () => {
                     setTotalAssets(refreshData.pagination.total);
                     setTotalPages(refreshData.pagination.total_pages);
                     
-                    // Apply filters
+                    // Apply filters (using array-based multi-select filters)
                     let filtered = refreshData.assets;
                     if (searchTerm) {
                       filtered = filtered.filter(asset => 
@@ -1349,25 +1419,74 @@ const AssetsPage = () => {
                         (asset.catalog && asset.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
                       );
                     }
-                    if (typeFilter) {
-                      filtered = filtered.filter(asset => asset.type === typeFilter);
+                    if (typeFilter.length > 0) {
+                      filtered = filtered.filter(asset => typeFilter.includes(asset.type));
                     }
-                    if (catalogFilter) {
-                      filtered = filtered.filter(asset => asset.catalog === catalogFilter);
+                    if (catalogFilter.length > 0) {
+                      filtered = filtered.filter(asset => catalogFilter.includes(asset.catalog));
                     }
-                    if (approvalStatusFilter) {
+                    if (approvalStatusFilter.length > 0) {
                       filtered = filtered.filter(asset => {
                         const status = asset.operational_metadata?.approval_status || 'pending_review';
-                        return status === approvalStatusFilter;
+                        return approvalStatusFilter.includes(status);
                       });
                     }
-                    if (applicationNameFilter) {
+                    if (applicationNameFilter.length > 0) {
                       filtered = filtered.filter(asset => {
                         const appName = asset.business_metadata?.application_name || '';
-                        return appName === applicationNameFilter;
+                        return applicationNameFilter.includes(appName);
                       });
                     }
-                    setAssets(filtered);
+                    
+                    // If filters result in empty page and we were on a different page, try to stay on that page
+                    if (filtered.length === 0 && previousPage > 0) {
+                      // Try fetching the previous page to see if it has filtered results
+                      const previousPageUrl = `${API_BASE_URL}/api/assets?page=${previousPage + 1}&per_page=${pageSize}&_t=${timestamp}`;
+                      const previousPageResponse = await fetch(previousPageUrl);
+                      if (previousPageResponse.ok) {
+                        const previousPageData = await previousPageResponse.json();
+                        if (previousPageData.assets && previousPageData.pagination) {
+                          setAllAssets(previousPageData.assets);
+                          setCurrentPage(previousPage);
+                          // Re-apply filters
+                          let previousFiltered = previousPageData.assets;
+                          if (searchTerm) {
+                            previousFiltered = previousFiltered.filter(asset => 
+                              asset.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                              (asset.catalog && asset.catalog.toLowerCase().includes(searchTerm.toLowerCase()))
+                            );
+                          }
+                          if (typeFilter.length > 0) {
+                            previousFiltered = previousFiltered.filter(asset => typeFilter.includes(asset.type));
+                          }
+                          if (catalogFilter.length > 0) {
+                            previousFiltered = previousFiltered.filter(asset => catalogFilter.includes(asset.catalog));
+                          }
+                          if (approvalStatusFilter.length > 0) {
+                            previousFiltered = previousFiltered.filter(asset => {
+                              const status = asset.operational_metadata?.approval_status || 'pending_review';
+                              return approvalStatusFilter.includes(status);
+                            });
+                          }
+                          if (applicationNameFilter.length > 0) {
+                            previousFiltered = previousFiltered.filter(asset => {
+                              const appName = asset.business_metadata?.application_name || '';
+                              return applicationNameFilter.includes(appName);
+                            });
+                          }
+                          setAssets(previousFiltered);
+                        } else {
+                          // If previous page also has no results, show empty (already on page 0)
+                          setAssets([]);
+                        }
+                      } else {
+                        // If fetch fails, show empty (already on page 0)
+                        setAssets([]);
+                      }
+                    } else {
+                      // Normal case: set filtered assets (page 0 or has results)
+                      setAssets(filtered);
+                    }
                   }
                 }
               } catch (error) {
@@ -2511,11 +2630,29 @@ const AssetsPage = () => {
                                         const newEditData = { ...columnEditData };
                                         delete newEditData[column.name];
                                         setColumnEditData(newEditData);
-                                        await fetchAssets(); // Refresh the assets list
+                                        
+                                        // Refresh the assets list and check if page becomes empty
+                                        try {
+                                          const filteredCount = await fetchAssets(null, true);
+                                          
+                                          // If current page is empty after filtering and we're not on page 0, go to previous page
+                                          if (filteredCount === 0 && currentPage > 0) {
+                                            const newPage = Math.max(0, currentPage - 1);
+                                            setCurrentPage(newPage);
+                                            await fetchAssets(newPage);
+                                          }
+                                        } catch (fetchError) {
+                                          console.error('Error refreshing assets after column save:', fetchError);
+                                          // Non-critical error - just log it
+                                        }
+                                      } else {
+                                        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                                        throw new Error(errorData.error || 'Failed to save column changes');
                                       }
                                     } catch (error) {
                                       console.error('Error saving column:', error);
-                                      alert('Failed to save column changes');
+                                      const errorMessage = error instanceof Error ? error.message : String(error || 'Unknown error');
+                                      alert(`Failed to save column changes: ${errorMessage}`);
                                     } finally {
                                       setSavingColumn(false);
                                     }
