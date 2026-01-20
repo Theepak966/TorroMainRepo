@@ -1,0 +1,29 @@
+version: '3.8'
+
+# Standalone Oracle Database for testing
+# Usage: docker-compose -f docker/docker-compose.oracle.yml up -d
+
+services:
+  oracle-db:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: torro-oracle
+    environment:
+      - ORACLE_PASSWORD=Oracle123
+      - ORACLE_DATABASE=ORCL
+    ports:
+      - "1521:1521"
+      - "5500:5500"  # Oracle Enterprise Manager Express
+    volumes:
+      - oracle_data:/opt/oracle/oradata
+      - ./oracle-init.sql:/docker-entrypoint-initdb.d/oracle-init.sql:ro
+    healthcheck:
+      test: ["CMD", "sqlplus", "-S", "sys/Oracle123@localhost:1521/XE", "AS", "SYSDBA", "-c", "SELECT 1 FROM DUAL"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+volumes:
+  oracle_data:
+

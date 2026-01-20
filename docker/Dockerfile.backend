@@ -1,0 +1,37 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Sensible defaults for Docker (these are overridden by docker-compose environment if provided)
+# NOTE: backend/config.py loads .env but does NOT override existing environment variables, so
+# these ENV defaults prevent accidental fallback to localhost when users run the container directly.
+ENV FLASK_ENV=production \
+    FLASK_HOST=0.0.0.0 \
+    FLASK_PORT=8099 \
+    DB_HOST=mysql \
+    DB_PORT=3306 \
+    DB_USER=root \
+    DB_NAME=torroforairflow
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Expose port
+EXPOSE 8099
+
+# Run application
+CMD ["python", "main.py"]
+
