@@ -1739,7 +1739,7 @@ const AssetsPage = () => {
                 PaperProps={{
                   style: {
                     maxHeight: 300,
-                    width: 200,
+                    width: 350,
                   },
                 }}
               >
@@ -1774,7 +1774,7 @@ const AssetsPage = () => {
                 PaperProps={{
                   style: {
                     maxHeight: 300,
-                    width: 200,
+                    width: 400,
                   },
                 }}
               >
