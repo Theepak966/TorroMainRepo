@@ -1,7 +1,3 @@
--- Best-in-class Data Lineage System Migration
--- Creates tables for Dataset, Process, LineageEdge, ColumnLineage, and AuditLog
--- Optimized for bank environment with performance and compliance requirements
-
 USE torroforairflow;
 
 -- ============================================
@@ -177,24 +173,5 @@ CREATE TABLE IF NOT EXISTS lineage_audit_log (
     INDEX idx_audit_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ============================================
--- Add Foreign Keys (after table creation)
--- Note: Foreign keys are optional for performance - can be added later if needed
--- ============================================
--- ALTER TABLE lineage_edges
---     ADD CONSTRAINT fk_edge_source FOREIGN KEY (source_urn) REFERENCES lineage_datasets(urn) ON DELETE CASCADE,
---     ADD CONSTRAINT fk_edge_process FOREIGN KEY (process_urn) REFERENCES lineage_processes(urn) ON DELETE CASCADE,
---     ADD CONSTRAINT fk_edge_target FOREIGN KEY (target_urn) REFERENCES lineage_datasets(urn) ON DELETE CASCADE;
-
--- ============================================
--- Performance Optimization Notes:
--- ============================================
--- 1. All foreign keys have CASCADE delete for data integrity
--- 2. Composite indexes on (source_urn, target_urn, valid_from) for fast lookups
--- 3. Temporal indexes on (valid_from, valid_to) for time-based queries
--- 4. Ingestion ID indexed for idempotency checks
--- 5. Column lineage stored separately (not graph-traversed by default)
--- 6. Audit log has separate indexes for compliance queries
--- ============================================
 
 
