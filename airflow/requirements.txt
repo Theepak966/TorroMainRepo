@@ -1,4 +1,4 @@
-apache-airflow==2.7.0
+apache-airflow==2.8.0
 pymysql==1.1.0
 python-dotenv==1.0.0
 azure-storage-blob==12.19.0
@@ -9,8 +9,8 @@ azure-data-tables==12.4.0
 azure-identity==1.15.0
 azure-core==1.30.0
 azure-ai-textanalytics==5.3.0
-pyarrow>=18.0.0
-pandas>=2.2.0
+pyarrow==18.0.0
+pandas==2.2.0
 fastavro>=1.11.0
 openpyxl==3.1.2
 xmltodict==0.13.0
