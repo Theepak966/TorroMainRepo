@@ -50,6 +50,10 @@ import {
   ListItemText,
   LinearProgress,
   Badge,
+  Switch,
+  FormGroup,
+  FormControlLabel,
+  FormLabel,
 } from '@mui/material';
 import {
   Refresh,
@@ -73,6 +77,7 @@ import {
   Add,
   Description,
   ArrowForward,
+  Settings,
 } from '@mui/icons-material';
 import ManualLineageDialog from '../components/ManualLineageDialog';
 
@@ -203,6 +208,36 @@ const DataLineagePage = () => {
   const [filterType, setFilterType] = useState('all');
   const [filterSource, setFilterSource] = useState('all');
   const [columnRelationships, setColumnRelationships] = useState(0);
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  
+  // Loading messages to rotate through
+  const loadingMessages = [
+    {
+      title: "Please wait, your assets are getting loaded...",
+      description: "We're fetching and processing your data lineage information. This may take a few moments.",
+      detail: "Building relationships and preparing the visualization..."
+    },
+    {
+      title: "Connecting to data sources...",
+      description: "Establishing connections and retrieving asset metadata from your databases and storage systems.",
+      detail: "This process ensures we have the latest information about your data assets."
+    },
+    {
+      title: "Analyzing data relationships...",
+      description: "Discovering connections and dependencies between your assets to build a comprehensive lineage map.",
+      detail: "Mapping data flows and transformations across your infrastructure..."
+    },
+    {
+      title: "Processing lineage information...",
+      description: "Organizing and structuring the lineage data to create an interactive visualization.",
+      detail: "Almost there! Preparing the final graph for display..."
+    },
+    {
+      title: "Finalizing visualization...",
+      description: "Applying layout algorithms and optimizing the graph for the best viewing experience.",
+      detail: "Just a few more seconds and you'll see your complete data lineage!"
+    }
+  ];
   const [selectedEdge, setSelectedEdge] = useState(null);
   const [edgeDetailsOpen, setEdgeDetailsOpen] = useState(false);
   const [selectedAssetForLineage, setSelectedAssetForLineage] = useState(null);
@@ -212,7 +247,68 @@ const DataLineagePage = () => {
   const [activeDetailTab, setActiveDetailTab] = useState('basic');
   const [selectedNode, setSelectedNode] = useState(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [metadataSettingsOpen, setMetadataSettingsOpen] = useState(false);
+  const [metadataSettingsTab, setMetadataSettingsTab] = useState(0);
   const [avgConfidence, setAvgConfidence] = useState(null);
+  
+  // Metadata visibility settings for asset details
+  const defaultDetailVisibility = {
+    basic: {
+      'Asset Name': true,
+      'Asset ID': true,
+      'Type': true,
+      'Catalog': true,
+      'Data Source': true,
+      'Discovered At': true,
+    },
+    columns: {
+      'Column Name': true,
+      'Data Type': true,
+      'Nullable': true,
+      'Description': true,
+      'PII Status': true,
+      'Constraints': true,
+    },
+    metadata: {
+      'Connection Details': true,
+      'Discovery Information': true,
+      'Technical Details': true,
+      'Data Governance': true,
+      'PII Analysis Summary': true,
+    }
+  };
+  
+  const loadDetailVisibility = () => {
+    try {
+      const saved = localStorage.getItem('lineageDetailVisibility');
+      if (saved) {
+        const savedVisibility = JSON.parse(saved);
+        return {
+          basic: { ...defaultDetailVisibility.basic, ...savedVisibility.basic },
+          columns: { ...defaultDetailVisibility.columns, ...savedVisibility.columns },
+          metadata: { ...defaultDetailVisibility.metadata, ...savedVisibility.metadata },
+        };
+      }
+    } catch (e) {
+      console.error('Error loading detail visibility:', e);
+    }
+    return defaultDetailVisibility;
+  };
+  
+  const [detailVisibility, setDetailVisibility] = useState(loadDetailVisibility);
+  
+  const saveDetailVisibility = (visibility) => {
+    try {
+      localStorage.setItem('lineageDetailVisibility', JSON.stringify(visibility));
+      setDetailVisibility(visibility);
+    } catch (e) {
+      console.error('Error saving detail visibility:', e);
+    }
+  };
+  
+  const resetDetailVisibility = () => {
+    saveDetailVisibility(defaultDetailVisibility);
+  };
   const [columnPage, setColumnPage] = useState(0);
   const [lineageViewMode, setLineageViewMode] = useState('hierarchical'); // 'hierarchical' or 'actual'
   const [columnsPerPage] = useState(10);
@@ -545,6 +641,22 @@ const DataLineagePage = () => {
     fetchLineage();
     fetchAssets();
   }, []);
+
+  // Rotate loading messages every 3 seconds when loading
+  useEffect(() => {
+    if (!loading) {
+      setLoadingMessageIndex(0);
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      setLoadingMessageIndex((prevIndex) => 
+        (prevIndex + 1) % loadingMessages.length
+      );
+    }, 3000); // Change message every 3 seconds
+    
+    return () => clearInterval(interval);
+  }, [loading, loadingMessages.length]);
 
   // Re-apply view mode filter when lineageViewMode changes (only refresh display, don't re-fetch)
   useEffect(() => {
@@ -1843,8 +1955,54 @@ const DataLineagePage = () => {
       {}
       <Card sx={{ position: 'relative', height: '700px', mb: 4 }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <CircularProgress />
+          <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', gap: 2 }}>
+            <CircularProgress size={60} />
+            <Box sx={{ textAlign: 'center', maxWidth: '500px', px: 2, minHeight: '140px', position: 'relative' }}>
+              {loadingMessages.map((msg, idx) => (
+                <Box
+                  key={idx}
+                  sx={{
+                    position: idx === loadingMessageIndex ? 'relative' : 'absolute',
+                    width: '100%',
+                    opacity: idx === loadingMessageIndex ? 1 : 0,
+                    transform: idx === loadingMessageIndex ? 'translateY(0)' : 'translateY(10px)',
+                    transition: 'opacity 0.5s ease-in-out, transform 0.5s ease-in-out',
+                    pointerEvents: idx === loadingMessageIndex ? 'auto' : 'none',
+                    zIndex: idx === loadingMessageIndex ? 1 : 0
+                  }}
+                >
+                  <Typography 
+                    variant="h6" 
+                    sx={{ 
+                      fontWeight: 500, 
+                      color: 'text.primary',
+                      mb: 1
+                    }}
+                  >
+                    {msg.title}
+                  </Typography>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ 
+                      color: 'text.secondary', 
+                      mb: 1
+                    }}
+                  >
+                    {msg.description}
+                  </Typography>
+                  <Typography 
+                    variant="caption" 
+                    sx={{ 
+                      color: 'text.secondary',
+                      display: 'block',
+                      fontStyle: 'italic'
+                    }}
+                  >
+                    {msg.detail}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
           </Box>
         ) : !selectedAssetForLineage ? (
           <Box sx={{ 
@@ -2032,12 +2190,13 @@ const DataLineagePage = () => {
       {}
       {selectedAssetDetails && (
         <Card sx={{ mb: 4, minHeight: '400px' }}>
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 2 }}>
             <Tabs 
               value={activeDetailTab} 
               onChange={(e, newValue) => setActiveDetailTab(newValue)}
               variant="scrollable"
               scrollButtons="auto"
+              sx={{ flex: 1 }}
             >
               <Tab 
                 label="Basic Information" 
@@ -2084,50 +2243,92 @@ const DataLineagePage = () => {
                 />
               )}
             </Tabs>
-                </Box>
+            <Button
+              variant="outlined"
+              startIcon={<Settings />}
+              onClick={() => setMetadataSettingsOpen(true)}
+              sx={{ textTransform: 'none', ml: 2 }}
+              size="small"
+            >
+              Settings
+            </Button>
+          </Box>
           
           <CardContent sx={{ p: 4, minHeight: '350px', overflow: 'auto' }}>
             {}
             {activeDetailTab === 'basic' && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
-                    Asset Name
+                {detailVisibility.basic['Asset Name'] && (
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                      Asset Name
                     </Typography>
-                  <Typography variant="h5" sx={{ fontWeight: 600, color: '#333' }}>
-                    {selectedAssetDetails.name}
+                    <Typography variant="h5" sx={{ fontWeight: 600, color: '#333' }}>
+                      {selectedAssetDetails.name}
                     </Typography>
-                </Box>
-                <Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                  </Box>
+                )}
+
+                {detailVisibility.basic['Asset ID'] && (
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
                       Asset ID
                     </Typography>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: '#666' }}>
-                    {selectedAssetDetails.id}
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: '#666' }}>
+                      {selectedAssetDetails.id}
                     </Typography>
-                </Box>
-                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                  <Chip 
-                    label={selectedAssetDetails.type} 
-                    size="medium" 
-                    variant="outlined"
-                    sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
-                  />
-                  <Chip 
-                    label={selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || selectedAssetDetails.connector_id || 'Azure Blob Storage'} 
-                    size="medium" 
-                    variant="outlined"
-                    sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
-                  />
-                </Box>
-                <Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
-                    Catalog
+                  </Box>
+                )}
+
+                {(detailVisibility.basic['Type'] || detailVisibility.basic['Data Source']) && (
+                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                    {detailVisibility.basic['Type'] && (
+                      <Chip 
+                        label={selectedAssetDetails.type} 
+                        size="medium" 
+                        variant="outlined"
+                        sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
+                      />
+                    )}
+                    {detailVisibility.basic['Data Source'] && (
+                      <Chip 
+                        label={selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || selectedAssetDetails.connector_id || 'Azure Blob Storage'} 
+                        size="medium" 
+                        variant="outlined"
+                        sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
+                      />
+                    )}
+                  </Box>
+                )}
+
+                {detailVisibility.basic['Catalog'] && (
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                      Catalog
                     </Typography>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, color: '#666' }}>
-                    {selectedAssetDetails.catalog || 'N/A'}
-                      </Typography>
-                </Box>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, color: '#666' }}>
+                      {selectedAssetDetails.catalog || 'N/A'}
+                    </Typography>
+                  </Box>
+                )}
+
+                {detailVisibility.basic['Discovered At'] && (
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                      Discovered At
+                    </Typography>
+                    <Typography variant="body2" sx={{ fontSize: 12, color: '#666' }}>
+                      {(() => {
+                        const d = selectedAssetDetails.discovered_at || selectedAssetDetails.discoveredAt || selectedAssetDetails.created_at;
+                        try {
+                          return d ? new Date(d).toLocaleString() : 'N/A';
+                        } catch {
+                          return d || 'N/A';
+                        }
+                      })()}
+                    </Typography>
+                  </Box>
+                )}
               </Box>
             )}
 
@@ -2142,11 +2343,21 @@ const DataLineagePage = () => {
                     <Table>
                           <TableHead>
                             <TableRow>
-                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Name</TableCell>
-                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Type</TableCell>
-                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>PII Status</TableCell>
-                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Description</TableCell>
-                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Constraints</TableCell>
+                          {detailVisibility.columns['Column Name'] && (
+                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Name</TableCell>
+                          )}
+                          {detailVisibility.columns['Data Type'] && (
+                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Type</TableCell>
+                          )}
+                          {detailVisibility.columns['PII Status'] && (
+                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>PII Status</TableCell>
+                          )}
+                          {detailVisibility.columns['Description'] && (
+                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Description</TableCell>
+                          )}
+                          {detailVisibility.columns['Constraints'] && (
+                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Constraints</TableCell>
+                          )}
                             </TableRow>
                           </TableHead>
                           <TableBody>
@@ -2155,122 +2366,132 @@ const DataLineagePage = () => {
                           const isPII = detectPII(col.name, col.description);
                           return (
                               <TableRow key={index}>
-                              <TableCell sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
-                                {col.name}
-                              </TableCell>
-                                <TableCell>
-                                <Chip 
-                                  label={col.type} 
-                                  size="small" 
-                                  variant="outlined"
-                                  sx={{ borderColor: '#ddd', color: '#666' }}
-                                />
+                              {detailVisibility.columns['Column Name'] && (
+                                <TableCell sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                                  {col.name}
                                 </TableCell>
-                              <TableCell>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                  {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
-                                    <Chip 
-                                      label="PII" 
-                                      size="small" 
-                                      color="error"
-                                      sx={{ fontWeight: 600, cursor: 'pointer' }}
-                                      onClick={async () => {
-                                        try {
-                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                                          const response = await fetch(
-                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
-                                            {
-                                              method: 'PUT',
-                                              headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({
-                                                pii_detected: false,
-                                                pii_types: null
-                                              })
-                                            }
-                                          );
-                                          if (response.ok) {
-                                            const updatedAsset = { ...selectedAssetDetails };
-                                            updatedAsset.columns = updatedAsset.columns.map(c => 
-                                              c.name === col.name 
-                                                ? { ...c, pii_detected: false, pii_types: null }
-                                                : c
+                              )}
+                              {detailVisibility.columns['Data Type'] && (
+                                <TableCell>
+                                  <Chip 
+                                    label={col.type} 
+                                    size="small" 
+                                    variant="outlined"
+                                    sx={{ borderColor: '#ddd', color: '#666' }}
+                                  />
+                                </TableCell>
+                              )}
+                              {detailVisibility.columns['PII Status'] && (
+                                <TableCell>
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
+                                      <Chip 
+                                        label="PII" 
+                                        size="small" 
+                                        color="error"
+                                        sx={{ fontWeight: 600, cursor: 'pointer' }}
+                                        onClick={async () => {
+                                          try {
+                                            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                            const response = await fetch(
+                                              `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                              {
+                                                method: 'PUT',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                  pii_detected: false,
+                                                  pii_types: null
+                                                })
+                                              }
                                             );
-                                            setSelectedAssetDetails(updatedAsset);
-                                          }
-                                        } catch (err) {
-                                          console.error('Failed to update PII status:', err);
-                                        }
-                                      }}
-                                    />
-                                  ) : (
-                                    <Chip 
-                                      label="Safe" 
-                                      size="small" 
-                                      color="success"
-                                      variant="outlined"
-                                      sx={{ fontWeight: 500, cursor: 'pointer' }}
-                                      onClick={async () => {
-                                        try {
-                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                                          const response = await fetch(
-                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
-                                            {
-                                              method: 'PUT',
-                                              headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({
-                                                pii_detected: true,
-                                                pii_types: col.pii_types || ['PII']
-                                              })
+                                            if (response.ok) {
+                                              const updatedAsset = { ...selectedAssetDetails };
+                                              updatedAsset.columns = updatedAsset.columns.map(c => 
+                                                c.name === col.name 
+                                                  ? { ...c, pii_detected: false, pii_types: null }
+                                                  : c
+                                              );
+                                              setSelectedAssetDetails(updatedAsset);
                                             }
-                                          );
-                                          if (response.ok) {
-                                            const updatedAsset = { ...selectedAssetDetails };
-                                            updatedAsset.columns = updatedAsset.columns.map(c => 
-                                              c.name === col.name 
-                                                ? { ...c, pii_detected: true, pii_types: c.pii_types || ['PII'] }
-                                                : c
-                                            );
-                                            setSelectedAssetDetails(updatedAsset);
+                                          } catch (err) {
+                                            console.error('Failed to update PII status:', err);
                                           }
-                                        } catch (err) {
-                                          console.error('Failed to update PII status:', err);
-                                        }
-                                      }}
-                                    />
-                                  )}
-                                </Box>
-                              </TableCell>
-                              <TableCell sx={{ color: '#666' }}>
-                                {col.description || '-'}
-                              </TableCell>
-                              <TableCell>
-                                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                                  {col.nullable === false && (
-                                    <Chip 
-                                      label="NOT NULL" 
-                                      size="small" 
-                                      variant="outlined"
-                                      sx={{ fontSize: 9, height: 20, borderColor: '#ff9800', color: '#ff9800' }}
-                                    />
-                                  )}
-                                  {col.unique && (
-                                    <Chip 
-                                      label="UNIQUE" 
-                                      size="small" 
-                                      variant="outlined"
-                                      sx={{ fontSize: 9, height: 20, borderColor: '#2196f3', color: '#2196f3' }}
-                                    />
-                                  )}
-                                  {col.primary_key && (
-                                    <Chip 
-                                      label="PK" 
-                                      size="small" 
-                                      color="primary"
-                                      sx={{ fontSize: 9, height: 20 }}
-                                    />
-                                  )}
-                                </Box>
-                              </TableCell>
+                                        }}
+                                      />
+                                    ) : (
+                                      <Chip 
+                                        label="Safe" 
+                                        size="small" 
+                                        color="success"
+                                        variant="outlined"
+                                        sx={{ fontWeight: 500, cursor: 'pointer' }}
+                                        onClick={async () => {
+                                          try {
+                                            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                            const response = await fetch(
+                                              `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                              {
+                                                method: 'PUT',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                  pii_detected: true,
+                                                  pii_types: col.pii_types || ['PII']
+                                                })
+                                              }
+                                            );
+                                            if (response.ok) {
+                                              const updatedAsset = { ...selectedAssetDetails };
+                                              updatedAsset.columns = updatedAsset.columns.map(c => 
+                                                c.name === col.name 
+                                                  ? { ...c, pii_detected: true, pii_types: c.pii_types || ['PII'] }
+                                                  : c
+                                              );
+                                              setSelectedAssetDetails(updatedAsset);
+                                            }
+                                          } catch (err) {
+                                            console.error('Failed to update PII status:', err);
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                  </Box>
+                                </TableCell>
+                              )}
+                              {detailVisibility.columns['Description'] && (
+                                <TableCell sx={{ color: '#666' }}>
+                                  {col.description || '-'}
+                                </TableCell>
+                              )}
+                              {detailVisibility.columns['Constraints'] && (
+                                <TableCell>
+                                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                                    {detailVisibility.columns['Nullable'] && col.nullable === false && (
+                                      <Chip 
+                                        label="NOT NULL" 
+                                        size="small" 
+                                        variant="outlined"
+                                        sx={{ fontSize: 9, height: 20, borderColor: '#ff9800', color: '#ff9800' }}
+                                      />
+                                    )}
+                                    {col.unique && (
+                                      <Chip 
+                                        label="UNIQUE" 
+                                        size="small" 
+                                        variant="outlined"
+                                        sx={{ fontSize: 9, height: 20, borderColor: '#2196f3', color: '#2196f3' }}
+                                      />
+                                    )}
+                                    {col.primary_key && (
+                                      <Chip 
+                                        label="PK" 
+                                        size="small" 
+                                        color="primary"
+                                        sx={{ fontSize: 9, height: 20 }}
+                                      />
+                                    )}
+                                  </Box>
+                                </TableCell>
+                              )}
                               </TableRow>
                           );
                         })}
@@ -2367,6 +2588,7 @@ const DataLineagePage = () => {
                 
                 {}
                 <Grid container spacing={3} sx={{ mb: 4 }}>
+                  {detailVisibility.metadata['Connection Details'] && (
                   <Grid item xs={12} md={6}>
                     <Box sx={{ p: 3, border: '1px solid #e0e0e0', borderRadius: 2, backgroundColor: '#fafafa' }}>
                       <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2, color: '#333' }}>
@@ -2403,7 +2625,9 @@ const DataLineagePage = () => {
                       </Box>
                     </Box>
                   </Grid>
+                  )}
                   
+                  {detailVisibility.metadata['Discovery Information'] && (
                   <Grid item xs={12} md={6}>
                     <Box sx={{ p: 3, border: '1px solid #e0e0e0', borderRadius: 2, backgroundColor: '#fafafa' }}>
                       <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2, color: '#333' }}>
@@ -2437,9 +2661,11 @@ const DataLineagePage = () => {
                       </Box>
                     </Box>
                   </Grid>
+                  )}
                 </Grid>
 
                 {}
+                {detailVisibility.metadata['Technical Details'] && (
                 <Box sx={{ mb: 4 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     Technical Details
@@ -2487,8 +2713,10 @@ const DataLineagePage = () => {
                     </Grid>
                   </Grid>
                 </Box>
+                )}
 
                 {}
+                {detailVisibility.metadata['Data Governance'] && (
                 <Box sx={{ mb: 4 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     Data Governance
@@ -2549,8 +2777,10 @@ const DataLineagePage = () => {
                     </Grid>
                   </Grid>
                 </Box>
+                )}
 
                 {}
+                {detailVisibility.metadata['PII Analysis Summary'] && (
                 <Box>
                   <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 3, color: '#333' }}>
                     PII Analysis Summary
@@ -2588,6 +2818,7 @@ const DataLineagePage = () => {
                     </Grid>
                   </Grid>
                 </Box>
+                )}
               </Box>
             )}
 
@@ -3409,6 +3640,144 @@ const DataLineagePage = () => {
           }
         }}
       />
+
+      {/* Metadata Visibility Settings Dialog */}
+      <Dialog 
+        open={metadataSettingsOpen} 
+        onClose={() => setMetadataSettingsOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Typography variant="h6">Asset Detail Visibility Settings</Typography>
+            <Box>
+              <Button
+                size="small"
+                onClick={resetDetailVisibility}
+                sx={{ mr: 1 }}
+              >
+                Reset to Default
+              </Button>
+              <IconButton onClick={() => setMetadataSettingsOpen(false)} size="small">
+                <Close />
+              </IconButton>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Tabs 
+            value={metadataSettingsTab} 
+            onChange={(e, newValue) => setMetadataSettingsTab(newValue)}
+            sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+          >
+            <Tab label="Basic Information" />
+            <Tab label="Column Information" />
+            <Tab label="Metadata" />
+          </Tabs>
+          
+          <Box sx={{ mt: 2 }}>
+            {metadataSettingsTab === 0 && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                  Toggle visibility of Basic Information fields
+                </Typography>
+                <FormGroup>
+                  {Object.keys(defaultDetailVisibility.basic).map((field) => (
+                    <FormControlLabel
+                      key={field}
+                      control={
+                        <Switch
+                          checked={detailVisibility.basic[field]}
+                          onChange={(e) => {
+                            const updated = {
+                              ...detailVisibility,
+                              basic: {
+                                ...detailVisibility.basic,
+                                [field]: e.target.checked,
+                              },
+                            };
+                            setDetailVisibility(updated);
+                            saveDetailVisibility(updated);
+                          }}
+                        />
+                      }
+                      label={field}
+                    />
+                  ))}
+                </FormGroup>
+              </Box>
+            )}
+            
+            {metadataSettingsTab === 1 && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                  Toggle visibility of Column Information fields
+                </Typography>
+                <FormGroup>
+                  {Object.keys(defaultDetailVisibility.columns).map((field) => (
+                    <FormControlLabel
+                      key={field}
+                      control={
+                        <Switch
+                          checked={detailVisibility.columns[field]}
+                          onChange={(e) => {
+                            const updated = {
+                              ...detailVisibility,
+                              columns: {
+                                ...detailVisibility.columns,
+                                [field]: e.target.checked,
+                              },
+                            };
+                            setDetailVisibility(updated);
+                            saveDetailVisibility(updated);
+                          }}
+                        />
+                      }
+                      label={field}
+                    />
+                  ))}
+                </FormGroup>
+              </Box>
+            )}
+            
+            {metadataSettingsTab === 2 && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                  Toggle visibility of Metadata sections
+                </Typography>
+                <FormGroup>
+                  {Object.keys(defaultDetailVisibility.metadata).map((field) => (
+                    <FormControlLabel
+                      key={field}
+                      control={
+                        <Switch
+                          checked={detailVisibility.metadata[field]}
+                          onChange={(e) => {
+                            const updated = {
+                              ...detailVisibility,
+                              metadata: {
+                                ...detailVisibility.metadata,
+                                [field]: e.target.checked,
+                              },
+                            };
+                            setDetailVisibility(updated);
+                            saveDetailVisibility(updated);
+                          }}
+                        />
+                      }
+                      label={field}
+                    />
+                  ))}
+                </FormGroup>
+              </Box>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMetadataSettingsOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

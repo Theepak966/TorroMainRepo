@@ -7,7 +7,7 @@ import os
 import sys
 import logging
 from flask import Blueprint, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
@@ -127,6 +127,51 @@ def get_discovery_by_id(discovery_id):
                     "operational_sql": view_sql['operational_sql'],
                     "has_masked_columns": view_sql['has_masked_columns']
                 }
+                
+                # Merge asset columns (with updated description, PII, masking logic) into schema_json
+                if not result["schema_json"] or not isinstance(result["schema_json"], dict):
+                    result["schema_json"] = {"columns": [], "num_columns": 0}
+                
+                schema_json = result["schema_json"]
+                schema_columns = schema_json.get("columns", [])
+                
+                # Create a map of asset columns by name for quick lookup
+                asset_columns_map = {col.get('name'): col for col in columns if col.get('name')}
+                
+                # Merge asset column data (description, PII, masking logic) into schema_json columns
+                merged_columns = []
+                for schema_col in schema_columns:
+                    col_name = schema_col.get('name')
+                    if col_name and col_name in asset_columns_map:
+                        # Merge asset column data into schema column
+                        asset_col = asset_columns_map[col_name]
+                        merged_col = dict(schema_col)  # Start with schema column
+                        # Update with asset column data (description, PII, masking logic)
+                        if 'description' in asset_col:
+                            merged_col['description'] = asset_col['description']
+                        if 'pii_detected' in asset_col:
+                            merged_col['pii_detected'] = asset_col['pii_detected']
+                        if 'pii_types' in asset_col:
+                            merged_col['pii_types'] = asset_col['pii_types']
+                        if 'masking_logic_analytical' in asset_col:
+                            merged_col['masking_logic_analytical'] = asset_col['masking_logic_analytical']
+                        if 'masking_logic_operational' in asset_col:
+                            merged_col['masking_logic_operational'] = asset_col['masking_logic_operational']
+                        merged_columns.append(merged_col)
+                    else:
+                        # Keep schema column as-is if not found in asset columns
+                        merged_columns.append(schema_col)
+                
+                # Add any asset columns that aren't in schema_json
+                schema_col_names = {col.get('name') for col in schema_columns if col.get('name')}
+                for asset_col in columns:
+                    if asset_col.get('name') and asset_col.get('name') not in schema_col_names:
+                        merged_columns.append(asset_col)
+                
+                schema_json["columns"] = merged_columns
+                schema_json["num_columns"] = len(merged_columns)
+                result["schema_json"] = schema_json
+                
             except Exception as e:
                 logger.warning('FN:get_discovery_by_id discovery_id:{} asset_id:{} message:Failed to fetch view_sql_commands error:{}'.format(
                     discovery_id, discovery.asset_id, str(e)
@@ -487,4 +532,209 @@ def trigger_discovery():
         logger.error('FN:trigger_discovery error:{}'.format(str(e)), exc_info=True)
         return jsonify({"error": str(e)}), 400
 
+
+@discovery_bp.route('/api/discovery/deduplicate', methods=['POST'])
+@handle_error
+def deduplicate_discoveries_by_schema():
+    """
+    Hide duplicate discovered assets by schema (column names).
+
+    If multiple assets have identical column sets, only the latest modified one is kept visible
+    and the rest are hidden from the discovery UI by setting DataDiscovery.is_visible = False.
+    """
+    db = SessionLocal()
+    try:
+        discoveries = (
+            db.query(DataDiscovery)
+            .options(joinedload(DataDiscovery.asset))
+            .filter(
+                DataDiscovery.is_visible.is_(True),
+                DataDiscovery.asset_id.isnot(None),
+            )
+            .all()
+        )
+
+        def parse_last_modified(d: DataDiscovery):
+            # Prefer file last_modified; fall back to updated_at, then discovered_at.
+            file_metadata = d.file_metadata or {}
+            timestamps = (file_metadata.get("timestamps") or {}) if isinstance(file_metadata, dict) else {}
+            storage_metadata = d.storage_metadata or {}
+            azure = (storage_metadata.get("azure") or {}) if isinstance(storage_metadata, dict) else {}
+
+            raw = timestamps.get("last_modified") or azure.get("last_modified")
+            dt = None
+
+            if raw:
+                try:
+                    if isinstance(raw, str):
+                        # ISO timestamps sometimes end with Z.
+                        if raw.endswith('Z'):
+                            raw = raw.replace('Z', '+00:00')
+                        if 'T' in raw:
+                            dt = datetime.fromisoformat(raw)
+                        else:
+                            # Best-effort date-only
+                            dt = datetime.strptime(raw, '%Y-%m-%d')
+                    elif hasattr(raw, 'tzinfo') or hasattr(raw, 'strftime'):
+                        dt = raw
+                except Exception:
+                    dt = None
+
+            if isinstance(dt, datetime) and dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+            return dt or d.updated_at or d.discovered_at or datetime.min
+
+        def schema_key(asset: Asset):
+            cols = normalize_columns(asset.columns or [])
+            names = []
+            for c in cols:
+                if not isinstance(c, dict):
+                    continue
+                n = c.get("name")
+                if not n:
+                    continue
+                names.append(str(n).strip().lower())
+            # Use set to avoid duplicates; sort for stable grouping
+            return tuple(sorted(set(names)))
+
+        groups = {}
+        for d in discoveries:
+            if not d.asset:
+                continue
+            key = schema_key(d.asset)
+            if not key:
+                continue
+            groups.setdefault(key, []).append(d)
+
+        hidden = 0
+        groups_deduped = 0
+
+        for _, ds in groups.items():
+            if len(ds) <= 1:
+                continue
+            groups_deduped += 1
+
+            # Keep the latest modified discovery visible.
+            ds_sorted = sorted(ds, key=parse_last_modified, reverse=True)
+            for dup in ds_sorted[1:]:
+                dup.is_visible = False
+                hidden += 1
+
+        db.commit()
+
+        logger.info('FN:deduplicate_discoveries_by_schema groups_deduped:{} hidden:{}'.format(
+            groups_deduped, hidden
+        ))
+
+        return jsonify({
+            "success": True,
+            "groups_deduped": groups_deduped,
+            "hidden": hidden,
+        }), 200
+    except Exception as e:
+        db.rollback()
+        logger.error('FN:deduplicate_discoveries_by_schema error:{}'.format(str(e)), exc_info=True)
+        return jsonify({"error": str(e)}), 400
+    finally:
+        db.close()
+
+
+@discovery_bp.route('/api/discovery/duplicates/hidden', methods=['GET'])
+@handle_error
+def list_hidden_duplicates():
+    """List hidden discoveries so users can review/restore them."""
+    db = SessionLocal()
+    try:
+        limit = request.args.get('limit', type=int, default=500)
+        if limit < 1:
+            limit = 1
+        if limit > 5000:
+            limit = 5000
+
+        hidden = (
+            db.query(DataDiscovery)
+            .options(joinedload(DataDiscovery.asset))
+            .filter(
+                DataDiscovery.is_visible.is_(False),
+                DataDiscovery.asset_id.isnot(None),
+            )
+            .order_by(DataDiscovery.updated_at.desc(), DataDiscovery.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+        def parse_last_modified(d: DataDiscovery):
+            file_metadata = d.file_metadata or {}
+            timestamps = (file_metadata.get("timestamps") or {}) if isinstance(file_metadata, dict) else {}
+            storage_metadata = d.storage_metadata or {}
+            azure = (storage_metadata.get("azure") or {}) if isinstance(storage_metadata, dict) else {}
+
+            raw = timestamps.get("last_modified") or azure.get("last_modified")
+            dt = None
+            if raw:
+                try:
+                    if isinstance(raw, str):
+                        if raw.endswith('Z'):
+                            raw = raw.replace('Z', '+00:00')
+                        if 'T' in raw:
+                            dt = datetime.fromisoformat(raw)
+                        else:
+                            dt = datetime.strptime(raw, '%Y-%m-%d')
+                    elif hasattr(raw, 'tzinfo') or hasattr(raw, 'strftime'):
+                        dt = raw
+                except Exception:
+                    dt = None
+            if isinstance(dt, datetime) and dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+
+        results = []
+        for d in hidden:
+            storage_location = d.storage_location or {}
+            file_metadata = d.file_metadata or {}
+            basic = (file_metadata.get("basic") or {}) if isinstance(file_metadata, dict) else {}
+
+            results.append({
+                "discovery_id": d.id,
+                "asset_id": d.asset_id,
+                "asset_name": d.asset.name if d.asset else None,
+                "asset_type": d.asset.type if d.asset else None,
+                "schema_hash": d.schema_hash,
+                "storage_path": storage_location.get("path"),
+                "file_name": basic.get("name"),
+                "file_last_modified": (parse_last_modified(d) or d.updated_at or d.discovered_at).isoformat() if (d.updated_at or d.discovered_at or parse_last_modified(d)) else None,
+                "discovered_at": d.discovered_at.isoformat() if d.discovered_at else None,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            })
+
+        return jsonify({
+            "total": len(results),
+            "hidden_duplicates": results,
+        }), 200
+    finally:
+        db.close()
+
+
+@discovery_bp.route('/api/discovery/<int:discovery_id>/restore', methods=['PUT'])
+@handle_error
+def restore_hidden_duplicate(discovery_id: int):
+    """Restore a hidden discovery back to the discovery UI."""
+    db = SessionLocal()
+    try:
+        d = db.query(DataDiscovery).filter(DataDiscovery.id == discovery_id).first()
+        if not d:
+            return jsonify({"error": "Discovery record not found"}), 404
+
+        d.is_visible = True
+        db.commit()
+
+        logger.info('FN:restore_hidden_duplicate discovery_id:{} restored:True'.format(discovery_id))
+        return jsonify({"success": True, "discovery_id": discovery_id}), 200
+    except Exception as e:
+        db.rollback()
+        logger.error('FN:restore_hidden_duplicate discovery_id:{} error:{}'.format(discovery_id, str(e)), exc_info=True)
+        return jsonify({"error": str(e)}), 400
+    finally:
+        db.close()
 

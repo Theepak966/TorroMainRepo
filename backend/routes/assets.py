@@ -13,7 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import SessionLocal
-from models import Asset, DataDiscovery
+from models import Asset, DataDiscovery, Connection
 from utils.helpers import handle_error, normalize_columns, normalize_column_schema, generate_view_sql_commands
 from flask import current_app
 
@@ -40,6 +40,23 @@ def get_assets():
                 if not asset:
                     return jsonify({"error": "Asset not found for this discovery_id"}), 404
                 
+                # Get application_name from connection config
+                application_name = None
+                if asset.connector_id:
+                    try:
+                        # Extract connection name from connector_id (format: "type_name")
+                        parts = asset.connector_id.split('_', 1)
+                        if len(parts) == 2:
+                            connector_type, connection_name = parts
+                            connection = db.query(Connection).filter(
+                                Connection.name == connection_name,
+                                Connection.connector_type == connector_type
+                            ).first()
+                            if connection and connection.config:
+                                application_name = connection.config.get('application_name')
+                    except Exception as e:
+                        logger.warning('FN:get_assets error_fetching_connection_for_single_asset:{}'.format(str(e)))
+                
                 # Quality score calculation removed - data quality detection has been removed
                 operational_metadata = asset.operational_metadata or {}
                 
@@ -56,7 +73,8 @@ def get_assets():
                     "columns": normalize_columns(asset.columns or []),
                     "discovery_id": discovery.id,
                     "discovery_status": discovery.status,
-                    "discovery_approval_status": discovery.approval_status
+                    "discovery_approval_status": discovery.approval_status,
+                    "application_name": application_name  # From connection config
                 }
                 # Add data_source_type from discovery
                 if discovery.data_source_type:
@@ -161,12 +179,14 @@ def get_assets():
 
         from sqlalchemy import case, func, or_
         
-        # Get latest discovery IDs for all assets (for joining)
+        # Get latest *visible* discovery IDs for all assets (for joining).
+        # This ensures assets don't disappear just because their newest discovery was hidden.
         latest_discovery_subq = db.query(
             DataDiscovery.asset_id,
             func.max(DataDiscovery.id).label('latest_discovery_id')
         ).filter(
-            DataDiscovery.asset_id.isnot(None)
+            DataDiscovery.asset_id.isnot(None),
+            DataDiscovery.is_visible.is_(True),
         ).group_by(DataDiscovery.asset_id).subquery()
         
         # Build base query
@@ -175,6 +195,17 @@ def get_assets():
         ).outerjoin(
             DataDiscovery, DataDiscovery.id == latest_discovery_subq.c.latest_discovery_id
         )
+
+        # Hide assets that have discoveries but none of them are visible (e.g. deduplicated-away).
+        # Still allow assets with no discovery record at all (e.g., non-DataDiscovery sources).
+        any_discovery_subq = (
+            db.query(DataDiscovery.asset_id.label("asset_id"))
+            .filter(DataDiscovery.asset_id.isnot(None))
+            .distinct()
+            .subquery()
+        )
+        query = query.outerjoin(any_discovery_subq, Asset.id == any_discovery_subq.c.asset_id)
+        query = query.filter(or_(DataDiscovery.id.isnot(None), any_discovery_subq.c.asset_id.is_(None)))
         
         # Apply filters at database level (before pagination)
         if search_term:
@@ -215,18 +246,27 @@ def get_assets():
         if application_name_filter:
             from sqlalchemy import text
             # Build conditions for each application name
+            # Check: 1) connection config application_name, 2) technical_metadata, 3) business_metadata
             app_conditions = []
             for idx, app_name in enumerate(application_name_filter):
-                # Use unique parameter names
                 param_name = f"app_name_{idx}"
-                # Check both technical_metadata and business_metadata
-                sql_str = (
-                    "(JSON_UNQUOTE(JSON_EXTRACT(assets.technical_metadata, '$.application_name')) = :{param} "
-                    "OR JSON_UNQUOTE(JSON_EXTRACT(assets.business_metadata, '$.application_name')) = :{param})"
-                ).format(param=param_name)
-                # Use params() method for parameter binding
-                condition = text(sql_str).params(**{param_name: app_name})
-                app_conditions.append(condition)
+                
+                # Combine all three sources with OR
+                # 1. Connection config application_name (most reliable source)
+                # 2. Technical metadata application_name
+                # 3. Business metadata application_name
+                # Use proper parameter binding with :param_name format
+                combined_condition = text(
+                    "(EXISTS ("
+                    "SELECT 1 FROM connections "
+                    "WHERE CONCAT(connections.connector_type, '_', connections.name) = assets.connector_id "
+                    f"AND JSON_UNQUOTE(JSON_EXTRACT(connections.config, '$.application_name')) = :{param_name}"
+                    ") "
+                    f"OR JSON_UNQUOTE(JSON_EXTRACT(assets.technical_metadata, '$.application_name')) = :{param_name} "
+                    f"OR JSON_UNQUOTE(JSON_EXTRACT(assets.business_metadata, '$.application_name')) = :{param_name})"
+                ).params(**{param_name: app_name})
+                
+                app_conditions.append(combined_condition)
             
             if app_conditions:
                 query = query.filter(or_(*app_conditions))
@@ -249,6 +289,19 @@ def get_assets():
         
         result = []
         seen_asset_ids = set()
+        # Get all connections to map connector_id to application_name
+        connections_map = {}
+        try:
+            connections = db.query(Connection).all()
+            for conn in connections:
+                connector_id_prefix = f"{conn.connector_type}_{conn.name}"
+                config = conn.config or {}
+                application_name = config.get('application_name')
+                if application_name:
+                    connections_map[connector_id_prefix] = application_name
+        except Exception as e:
+            logger.warning('FN:get_assets error_fetching_connections:{}'.format(str(e)))
+        
         for asset, discovery in assets_with_discovery:
 
             if asset.id in seen_asset_ids:
@@ -257,6 +310,19 @@ def get_assets():
             
             # Quality score calculation removed - data quality detection has been removed
             operational_metadata = asset.operational_metadata or {}
+            
+            # Get application_name from connection config
+            application_name = None
+            if asset.connector_id:
+                # Try exact match first
+                if asset.connector_id in connections_map:
+                    application_name = connections_map[asset.connector_id]
+                else:
+                    # Try prefix match (connector_id format: "type_name")
+                    for conn_prefix, app_name in connections_map.items():
+                        if asset.connector_id.startswith(conn_prefix):
+                            application_name = app_name
+                            break
             
             asset_data = {
             "id": asset.id,
@@ -268,7 +334,8 @@ def get_assets():
             "technical_metadata": asset.technical_metadata,
             "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata,
-            "columns": normalize_columns(asset.columns or [])
+            "columns": normalize_columns(asset.columns or []),
+            "application_name": application_name  # From connection config
             }
             if discovery:
                 asset_data["discovery_id"] = discovery.id
@@ -404,6 +471,23 @@ def get_asset_by_id(asset_id):
             DataDiscovery.asset_id == asset_id
         ).order_by(DataDiscovery.id.desc()).first()
         
+        # Get application_name from connection config
+        application_name = None
+        if asset.connector_id:
+            try:
+                # Extract connection name from connector_id (format: "type_name")
+                parts = asset.connector_id.split('_', 1)
+                if len(parts) == 2:
+                    connector_type, connection_name = parts
+                    connection = db.query(Connection).filter(
+                        Connection.name == connection_name,
+                        Connection.connector_type == connector_type
+                    ).first()
+                    if connection and connection.config:
+                        application_name = connection.config.get('application_name')
+            except Exception as e:
+                logger.warning('FN:get_asset_by_id error_fetching_connection:{}'.format(str(e)))
+        
         # Quality score calculation removed - data quality detection has been removed
         operational_metadata = asset.operational_metadata or {}
         columns = normalize_columns(asset.columns or [])
@@ -418,7 +502,8 @@ def get_asset_by_id(asset_id):
             "columns": columns,
             "technical_metadata": asset.technical_metadata or {},
             "operational_metadata": operational_metadata,
-            "business_metadata": asset.business_metadata or {}
+            "business_metadata": asset.business_metadata or {},
+            "application_name": application_name  # From connection config
         }
         
         # Generate SQL CREATE VIEW commands based on masking logic
@@ -532,9 +617,17 @@ def update_column_pii(asset_id, column_name):
         columns = asset.columns or []
         column_found = False
         
-        # Update the specific column's PII status
+        # Update the specific column's PII status and description
         for col in columns:
             if col.get('name') == column_name:
+                # Update description if provided
+                if 'description' in data:
+                    description = data.get('description')
+                    if isinstance(description, str):
+                        col['description'] = description.strip() if description.strip() else None
+                    else:
+                        col['description'] = description
+                
                 pii_detected = data.get('pii_detected', False)
                 col['pii_detected'] = pii_detected
                 # Set pii_types based on pii_detected status

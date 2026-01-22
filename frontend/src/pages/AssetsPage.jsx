@@ -102,6 +102,12 @@ const AssetsPage = () => {
   const [exportAnchorEl, setExportAnchorEl] = useState(null);
   const [selectedColumns, setSelectedColumns] = useState([]);
   const [showColumnCheckboxes, setShowColumnCheckboxes] = useState(false);
+
+  // Hidden duplicates review
+  const [hiddenDuplicatesOpen, setHiddenDuplicatesOpen] = useState(false);
+  const [hiddenDuplicatesLoading, setHiddenDuplicatesLoading] = useState(false);
+  const [hiddenDuplicates, setHiddenDuplicates] = useState([]);
+  const [removeDuplicatesMenuAnchor, setRemoveDuplicatesMenuAnchor] = useState(null);
   
   // Default metadata field visibility (all visible by default)
   // Only includes fields that are actually displayed in the UI and controlled by visibility settings
@@ -347,6 +353,7 @@ const AssetsPage = () => {
   const [piiDialogOpen, setPiiDialogOpen] = useState(false);
   const [selectedColumnForPii, setSelectedColumnForPii] = useState(null);
   const [piiDialogIsPii, setPiiDialogIsPii] = useState(false);
+  
   const [piiDialogTypes, setPiiDialogTypes] = useState([]);
   const [savingPii, setSavingPii] = useState(false);
   const [customPiiType, setCustomPiiType] = useState('');
@@ -360,20 +367,23 @@ const AssetsPage = () => {
 
 
   // Initialize masking logic from column data when asset is selected
+  // Use asset-scoped keys to prevent masking logic from being shared across assets
   useEffect(() => {
     if (selectedAsset?.columns) {
       const initialMaskingLogic = {};
+      const assetId = selectedAsset.id;
       selectedAsset.columns.forEach(col => {
         if (col.pii_detected) {
-          initialMaskingLogic[col.name] = {
+          const key = `${assetId}_${col.name}`;
+          initialMaskingLogic[key] = {
             analytical: col.masking_logic_analytical || '',
             operational: col.masking_logic_operational || ''
           };
         }
       });
       setColumnMaskingLogic(prev => {
-        // Merge with existing to preserve unsaved changes
-        return { ...initialMaskingLogic, ...prev };
+        // Merge with existing to preserve unsaved changes for other assets
+        return { ...prev, ...initialMaskingLogic };
       });
     }
   }, [selectedAsset]);
@@ -477,7 +487,7 @@ const AssetsPage = () => {
   const uniqueTypes = allAssets ? [...new Set(allAssets.map(asset => asset.type))] : [];
   const uniqueCatalogs = allAssets ? [...new Set(allAssets.map(asset => asset.catalog))] : [];
   const uniqueApplicationNames = allAssets ? [...new Set(allAssets.map(asset => 
-    asset.technical_metadata?.application_name || asset.business_metadata?.application_name
+    asset.application_name || asset.technical_metadata?.application_name || asset.business_metadata?.application_name
   ).filter(Boolean))] : [];
 
   const getDataSource = (connectorId) => {
@@ -1054,20 +1064,22 @@ const AssetsPage = () => {
 
   // PII Dialog handlers
   const handleOpenPiiDialog = (column) => {
+    if (!selectedAsset) return;
     setSelectedColumnForPii(column);
     setPiiDialogIsPii(column.pii_detected || false);
     setPiiDialogTypes(column.pii_types || []);
     setCustomPiiType('');
-    // Track original PII status to detect changes
+    // Track original PII status to detect changes (asset-scoped)
+    const key = `${selectedAsset.id}_${column.name}`;
     setOriginalPiiStatus(prev => ({
       ...prev,
-      [column.name]: column.pii_detected || false
+      [key]: column.pii_detected || false
     }));
-    // Initialize masking logic from column data if available
-    if (!columnMaskingLogic[column.name]) {
+    // Initialize masking logic from column data if available (asset-scoped)
+    if (!columnMaskingLogic[key]) {
       setColumnMaskingLogic(prev => ({
         ...prev,
-        [column.name]: {
+        [key]: {
           analytical: column.masking_logic_analytical || '',
           operational: column.masking_logic_operational || ''
         }
@@ -1098,7 +1110,8 @@ const AssetsPage = () => {
     setSavingPii(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const maskingLogic = columnMaskingLogic[selectedColumnForPii.name] || { analytical: '', operational: '' };
+      const key = `${selectedAsset.id}_${selectedColumnForPii.name}`;
+      const maskingLogic = columnMaskingLogic[key] || { analytical: '', operational: '' };
       const response = await fetch(
         `${API_BASE_URL}/api/assets/${selectedAsset.id}/columns/${selectedColumnForPii.name}/pii`,
         {
@@ -1134,10 +1147,10 @@ const AssetsPage = () => {
         setAllAssets(prev => prev.map(a => 
           a.id === selectedAsset.id ? updatedAsset : a
         ));
-        // Clear unsaved masking changes for this column
+        // Clear unsaved masking changes for this column (asset-scoped)
         setUnsavedMaskingChanges(prev => {
           const newState = { ...prev };
-          delete newState[selectedColumnForPii.name];
+          delete newState[key];
           return newState;
         });
         handleClosePiiDialog();
@@ -1152,6 +1165,7 @@ const AssetsPage = () => {
     }
   };
 
+
   // Handler to save masking logic changes directly from table
   const handleSaveMaskingLogic = async (columnName) => {
     if (!selectedAsset) return;
@@ -1159,10 +1173,12 @@ const AssetsPage = () => {
     const column = selectedAsset.columns.find(c => c.name === columnName);
     if (!column || !column.pii_detected) return;
     
-    const maskingLogic = columnMaskingLogic[columnName];
+    // Use asset-scoped key
+    const key = `${selectedAsset.id}_${columnName}`;
+    const maskingLogic = columnMaskingLogic[key];
     if (!maskingLogic) return;
     
-    setSavingMaskingLogic(prev => ({ ...prev, [columnName]: true }));
+    setSavingMaskingLogic(prev => ({ ...prev, [key]: true }));
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       const response = await fetch(
@@ -1198,10 +1214,10 @@ const AssetsPage = () => {
         setAllAssets(prev => prev.map(a => 
           a.id === selectedAsset.id ? updatedAsset : a
         ));
-        // Clear unsaved changes flag
+        // Clear unsaved changes flag (asset-scoped)
         setUnsavedMaskingChanges(prev => {
           const newState = { ...prev };
-          delete newState[columnName];
+          delete newState[key];
           return newState;
         });
       } else {
@@ -1213,7 +1229,7 @@ const AssetsPage = () => {
     } finally {
       setSavingMaskingLogic(prev => {
         const newState = { ...prev };
-        delete newState[columnName];
+        delete newState[key];
         return newState;
       });
     }
@@ -1524,6 +1540,48 @@ const AssetsPage = () => {
     return num.toLocaleString();
   };
 
+  const fetchHiddenDuplicates = async () => {
+    setHiddenDuplicatesLoading(true);
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const resp = await fetch(`${API_BASE_URL}/api/discovery/duplicates/hidden?limit=500`);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.error || 'Failed to load hidden duplicates');
+      }
+      setHiddenDuplicates(Array.isArray(data?.hidden_duplicates) ? data.hidden_duplicates : []);
+    } catch (e) {
+      console.error('Error loading hidden duplicates:', e);
+      alert(`Error: ${e?.message || 'Failed to load hidden duplicates'}`);
+      setHiddenDuplicates([]);
+    } finally {
+      setHiddenDuplicatesLoading(false);
+    }
+  };
+
+  const restoreHiddenDuplicate = async (discoveryId) => {
+    try {
+      setLoading(true);
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const resp = await fetch(`${API_BASE_URL}/api/discovery/${discoveryId}/restore`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.error || 'Failed to restore');
+      }
+      await fetchHiddenDuplicates();
+      setCurrentPage(0);
+      await fetchAssets(0);
+    } catch (e) {
+      console.error('Error restoring hidden duplicate:', e);
+      alert(`Error: ${e?.message || 'Failed to restore'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -1643,8 +1701,123 @@ const AssetsPage = () => {
           >
             Refresh
           </Button>
+          <Button
+            variant="outlined"
+            startIcon={<DataObject />}
+            endIcon={<ArrowDropDown />}
+            onClick={(e) => setRemoveDuplicatesMenuAnchor(e.currentTarget)}
+            disabled={loading}
+          >
+            Remove Duplicates
+          </Button>
+          <Menu
+            anchorEl={removeDuplicatesMenuAnchor}
+            open={Boolean(removeDuplicatesMenuAnchor)}
+            onClose={() => setRemoveDuplicatesMenuAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            <MenuItem
+              onClick={async () => {
+                setRemoveDuplicatesMenuAnchor(null);
+                try {
+                  setLoading(true);
+                  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                  const resp = await fetch(`${API_BASE_URL}/api/discovery/deduplicate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                  });
+                  const payload = await resp.json().catch(() => ({}));
+                  if (!resp.ok) {
+                    throw new Error(payload?.error || 'Failed to deduplicate discoveries');
+                  }
+                  const hidden = payload?.hidden ?? 0;
+                  alert(`Deduplication complete. Hidden ${hidden} duplicate asset(s).`);
+                  setCurrentPage(0);
+                  await fetchAssets(0);
+                } catch (error) {
+                  console.error('Error deduplicating discoveries:', error);
+                  alert(`Error: ${error?.message || 'Failed to deduplicate discoveries'}`);
+                } finally {
+                  setLoading(false);
+                }
+              }}
+            >
+              Hide duplicates
+            </MenuItem>
+            <MenuItem
+              onClick={async () => {
+                setRemoveDuplicatesMenuAnchor(null);
+                setHiddenDuplicatesOpen(true);
+                await fetchHiddenDuplicates();
+              }}
+            >
+              View hidden duplicates
+            </MenuItem>
+          </Menu>
         </Box>
       </Box>
+
+      <Dialog
+        open={hiddenDuplicatesOpen}
+        onClose={() => setHiddenDuplicatesOpen(false)}
+        fullWidth
+        maxWidth="lg"
+      >
+        <DialogTitle>Hidden Duplicates</DialogTitle>
+        <DialogContent>
+          {hiddenDuplicatesLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : hiddenDuplicates.length === 0 ? (
+            <Alert severity="info">No hidden duplicates.</Alert>
+          ) : (
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Type</TableCell>
+                    <TableCell>File</TableCell>
+                    <TableCell>Last Modified</TableCell>
+                    <TableCell>Storage Path</TableCell>
+                    <TableCell align="right">Action</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {hiddenDuplicates.map((row) => (
+                    <TableRow key={row.discovery_id}>
+                      <TableCell>{row.asset_name || '—'}</TableCell>
+                      <TableCell>{row.asset_type || '—'}</TableCell>
+                      <TableCell>{row.file_name || '—'}</TableCell>
+                      <TableCell>
+                        {row.file_last_modified ? new Date(row.file_last_modified).toLocaleString() : '—'}
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 420, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {row.storage_path || '—'}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => restoreHiddenDuplicate(row.discovery_id)}
+                          disabled={loading}
+                        >
+                          Restore
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setHiddenDuplicatesOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -1896,7 +2069,7 @@ const AssetsPage = () => {
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2" sx={{ fontFamily: 'Roboto' }}>
-                          {asset.technical_metadata?.application_name || 'N/A'}
+                          {asset.application_name || 'N/A'}
                         </Typography>
                       </TableCell>
                       <TableCell>
@@ -2393,7 +2566,7 @@ const AssetsPage = () => {
                     
                     // Azure Blob Storage metadata (existing code)
                     const safeLocation = technicalMetadata.location || 'N/A';
-                    const safeApplicationName = technicalMetadata.application_name || 'N/A';
+                    // Application name removed from technical_metadata - now comes from connection config
                     const safeSizeBytes = technicalMetadata.size_bytes || technicalMetadata.size || 0;
                     
                     let safeFormat = technicalMetadata.format;
@@ -2592,20 +2765,7 @@ const AssetsPage = () => {
                             </Card>
                           </Grid>
                         )}
-                        {safeApplicationName !== 'N/A' && metadataVisibility.technical['Application Name'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Application Name
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeApplicationName}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        )}
+                        {/* Application Name removed from technical metadata - now shown in main table from connection config */}
                         {safeNumRows > 0 && metadataVisibility.technical['Number of Rows'] && (
                           <Grid item xs={6}>
                             <Card variant="outlined">
@@ -2662,7 +2822,7 @@ const AssetsPage = () => {
                       const safeLastRefresh = operationalMetadata.last_refresh_date || technicalMetadata.last_refresh_date || null;
                       const safeConnectorId = selectedAsset?.connector_id || 'N/A';
                       const safeDiscoveryId = selectedAsset?.discovery_id || operationalMetadata.discovery_id || 'N/A';
-                      const safeApplicationName = selectedAsset?.business_metadata?.application_name || operationalMetadata.application_name || 'N/A';
+                      const safeApplicationName = selectedAsset?.application_name || selectedAsset?.business_metadata?.application_name || operationalMetadata.application_name || 'N/A';
                       
                     return (
                       <Grid container spacing={2}>
@@ -3422,9 +3582,20 @@ const AssetsPage = () => {
                                         {column.nullable !== undefined ? (column.nullable ? 'Yes' : 'No') : 'N/A'}
                                       </TableCell>
                                       <TableCell>
-                                        <Typography variant="body2" color="text.secondary">
-                                          {column.description || 'No description'}
-                                        </Typography>
+                                        <Tooltip title={column.description || 'No description'} arrow>
+                                          <Typography 
+                                            variant="body2" 
+                                            color="text.secondary"
+                                            sx={{ 
+                                              maxWidth: '200px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}
+                                          >
+                                            {column.description || 'No description'}
+                                          </Typography>
+                                        </Tooltip>
                                       </TableCell>
                                       <TableCell>
                                         {column.pii_detected ? (
@@ -3448,14 +3619,18 @@ const AssetsPage = () => {
                                         )}
                                       </TableCell>
                                       {hasPiiOrChanging && (() => {
+                                        if (!selectedAsset) return null;
+                                        
                                         const isPii = column.pii_detected || false;
+                                        // Use asset-scoped key for all state lookups
+                                        const key = `${selectedAsset.id}_${column.name}`;
                                         // Check if this column is being changed from Non-PII to PII in the dialog
                                         const isChangingToPii = piiDialogOpen && 
                                                                selectedColumnForPii?.name === column.name && 
                                                                piiDialogIsPii && 
-                                                               (originalPiiStatus[column.name] === false || !column.pii_detected);
+                                                               (originalPiiStatus[key] === false || !column.pii_detected);
                                         const showMasking = isPii || isChangingToPii;
-                                        const maskingLogic = columnMaskingLogic[column.name] || {
+                                        const maskingLogic = columnMaskingLogic[key] || {
                                           analytical: column.masking_logic_analytical || '',
                                           operational: column.masking_logic_operational || ''
                                         };
@@ -3478,9 +3653,9 @@ const AssetsPage = () => {
                                         const analyticalOptions = getMaskingOptions({ pii_types: currentPiiTypes }, 'analytical');
                                         const operationalOptions = getMaskingOptions({ pii_types: currentPiiTypes }, 'operational');
                                         
-                                        // Check if there are unsaved changes
-                                        const hasUnsavedChanges = unsavedMaskingChanges[column.name] || false;
-                                        const isSaving = savingMaskingLogic[column.name] || false;
+                                        // Check if there are unsaved changes (asset-scoped)
+                                        const hasUnsavedChanges = unsavedMaskingChanges[key] || false;
+                                        const isSaving = savingMaskingLogic[key] || false;
                                         
                                         return (
                                           <>
@@ -3490,17 +3665,19 @@ const AssetsPage = () => {
                                                   <Select
                                                     value={maskingLogic.analytical || ''}
                                                     onChange={(e) => {
+                                                      if (!selectedAsset) return;
+                                                      const key = `${selectedAsset.id}_${column.name}`;
                                                       setColumnMaskingLogic(prev => ({
                                                         ...prev,
-                                                        [column.name]: {
+                                                        [key]: {
                                                           ...maskingLogic,
                                                           analytical: e.target.value
                                                         }
                                                       }));
-                                                      // Mark as having unsaved changes
+                                                      // Mark as having unsaved changes (asset-scoped)
                                                       setUnsavedMaskingChanges(prev => ({
                                                         ...prev,
-                                                        [column.name]: true
+                                                        [key]: true
                                                       }));
                                                     }}
                                                     displayEmpty
@@ -3535,17 +3712,19 @@ const AssetsPage = () => {
                                                   <Select
                                                     value={maskingLogic.operational || ''}
                                                     onChange={(e) => {
+                                                      if (!selectedAsset) return;
+                                                      const key = `${selectedAsset.id}_${column.name}`;
                                                       setColumnMaskingLogic(prev => ({
                                                         ...prev,
-                                                        [column.name]: {
+                                                        [key]: {
                                                           ...maskingLogic,
                                                           operational: e.target.value
                                                         }
                                                       }));
-                                                      // Mark as having unsaved changes
+                                                      // Mark as having unsaved changes (asset-scoped)
                                                       setUnsavedMaskingChanges(prev => ({
                                                         ...prev,
-                                                        [column.name]: true
+                                                        [key]: true
                                                       }));
                                                     }}
                                                     displayEmpty
