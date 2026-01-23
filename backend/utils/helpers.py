@@ -253,26 +253,30 @@ def generate_view_sql_commands(asset, columns):
         masking_operational = col.get('masking_logic_operational')
         col_type = col.get('type', 'string')
         
-        if pii_detected:
-            if masking_analytical:
-                sql_expr = convert_masking_logic_to_sql(masking_analytical, col_name, col_type)
-                analytical_selects.append(f"    {sql_expr} AS {col_name}")
-                has_analytical_masking = True
-            else:
-                analytical_selects.append(f"    '***MASKED***' AS {col_name}")
-                has_analytical_masking = True
-        else:
-            analytical_selects.append(f"    {col_name}")
+        # Always include the original column
+        analytical_selects.append(f"    {col_name}")
+        operational_selects.append(f"    {col_name}")
         
-        if pii_detected:
+        # If masking logic is applied, add masked column
+        if pii_detected and masking_analytical:
+            sql_expr = convert_masking_logic_to_sql(masking_analytical, col_name, col_type)
+            masked_col_name = f"{col_name}_masked"
+            analytical_selects.append(f"    {sql_expr} AS {masked_col_name}")
+            has_analytical_masking = True
+        elif pii_detected:
+            # PII detected but no masking logic - add default masked column
+            masked_col_name = f"{col_name}_masked"
+            analytical_selects.append(f"    '***MASKED***' AS {masked_col_name}")
+            has_analytical_masking = True
+        
+        if pii_detected and masking_operational:
+            sql_expr = convert_masking_logic_to_sql(masking_operational, col_name, col_type)
+            masked_col_name = f"{col_name}_masked"
+            operational_selects.append(f"    {sql_expr} AS {masked_col_name}")
             has_operational_masking = True
-            if masking_operational:
-                sql_expr = convert_masking_logic_to_sql(masking_operational, col_name, col_type)
-                operational_selects.append(f"    {sql_expr} AS {col_name}")
-            else:
-                operational_selects.append(f"    {col_name}")
-        else:
-            operational_selects.append(f"    {col_name}")
+        elif pii_detected:
+            # PII detected but no masking logic for operational - just original column
+            has_operational_masking = True
     
     analytical_sql = None
     operational_sql = None
