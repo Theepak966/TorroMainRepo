@@ -202,6 +202,7 @@ const DataLineagePage = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingAssets, setLoadingAssets] = useState(true);
   const [error, setError] = useState(null);
   const [assets, setAssets] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -627,6 +628,7 @@ const DataLineagePage = () => {
 
   const fetchAssets = async () => {
     try {
+      setLoadingAssets(true);
       const allAssets = await fetchAllAssets();
       setAssets(allAssets);
     } catch (error) {
@@ -634,6 +636,8 @@ const DataLineagePage = () => {
       console.error('Error fetching assets:', error);
       }
       setAssets([]);
+    } finally {
+      setLoadingAssets(false);
     }
   };
 
@@ -642,9 +646,9 @@ const DataLineagePage = () => {
     fetchAssets();
   }, []);
 
-  // Rotate loading messages every 3 seconds when loading
+  // Rotate loading messages every 3 seconds when loading assets
   useEffect(() => {
-    if (!loading) {
+    if (!loadingAssets) {
       setLoadingMessageIndex(0);
       return;
     }
@@ -656,7 +660,7 @@ const DataLineagePage = () => {
     }, 3000); // Change message every 3 seconds
     
     return () => clearInterval(interval);
-  }, [loading, loadingMessages.length]);
+  }, [loadingAssets, loadingMessages.length]);
 
   // Re-apply view mode filter when lineageViewMode changes (only refresh display, don't re-fetch)
   useEffect(() => {
@@ -1954,7 +1958,7 @@ const DataLineagePage = () => {
 
       {}
       <Card sx={{ position: 'relative', height: '700px', mb: 4 }}>
-        {loading ? (
+        {loadingAssets ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', gap: 2 }}>
             <CircularProgress size={60} />
             <Box sx={{ textAlign: 'center', maxWidth: '500px', px: 2, minHeight: '140px', position: 'relative' }}>

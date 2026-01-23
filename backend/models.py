@@ -23,6 +23,7 @@ class Asset(Base):
     operational_metadata = Column(JSON)
     business_metadata = Column(JSON)
     columns = Column(JSON)
+    custom_columns = Column(JSON)  # Custom user-defined columns: { columnId: { label: string, values: { columnName: value } } }
     
 
     source_lineage = relationship("LineageRelationship", foreign_keys="LineageRelationship.source_asset_id", back_populates="source_asset")
