@@ -6,16 +6,18 @@ Production-level route handlers for data discovery operations.
 import os
 import sys
 import logging
+import threading
+import uuid
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import func
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, load_only
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import SessionLocal
-from models import Asset, DataDiscovery
+from models import Asset, DataDiscovery, DeduplicationJob
 from utils.helpers import handle_error, normalize_columns, generate_view_sql_commands
 from flask import current_app
 
@@ -533,58 +535,55 @@ def trigger_discovery():
         return jsonify({"error": str(e)}), 400
 
 
-@discovery_bp.route('/api/discovery/deduplicate', methods=['POST'])
-@handle_error
-def deduplicate_discoveries_by_schema():
+def _run_deduplication_worker(job_id: int):
     """
-    Hide duplicate discovered assets by schema (column names).
-
-    If multiple assets have identical column sets, only the latest modified one is kept visible
-    and the rest are hidden from the discovery UI by setting DataDiscovery.is_visible = False.
+    Background worker for deduplication. Handles streaming reads and chunked updates.
+    Scales to 100k+ files without loading everything into memory.
     """
+    import time
     db = SessionLocal()
     try:
-        discoveries = (
-            db.query(DataDiscovery)
-            .options(joinedload(DataDiscovery.asset))
-            .filter(
-                DataDiscovery.is_visible.is_(True),
-                DataDiscovery.asset_id.isnot(None),
-            )
-            .all()
-        )
-
+        # Get job
+        job = db.query(DeduplicationJob).filter(DeduplicationJob.id == job_id).first()
+        if not job:
+            logger.error('FN:_run_deduplication_worker job_id:{} not_found'.format(job_id))
+            return
+        
+        job.status = 'running'
+        job.started_at = datetime.utcnow()
+        db.commit()
+        
+        start_time = time.time()
+        
+        # Helper functions
         def parse_last_modified(d: DataDiscovery):
-            # Prefer file last_modified; fall back to updated_at, then discovered_at.
             file_metadata = d.file_metadata or {}
             timestamps = (file_metadata.get("timestamps") or {}) if isinstance(file_metadata, dict) else {}
             storage_metadata = d.storage_metadata or {}
             azure = (storage_metadata.get("azure") or {}) if isinstance(storage_metadata, dict) else {}
-
+            
             raw = timestamps.get("last_modified") or azure.get("last_modified")
             dt = None
-
+            
             if raw:
                 try:
                     if isinstance(raw, str):
-                        # ISO timestamps sometimes end with Z.
                         if raw.endswith('Z'):
                             raw = raw.replace('Z', '+00:00')
                         if 'T' in raw:
                             dt = datetime.fromisoformat(raw)
                         else:
-                            # Best-effort date-only
                             dt = datetime.strptime(raw, '%Y-%m-%d')
                     elif hasattr(raw, 'tzinfo') or hasattr(raw, 'strftime'):
                         dt = raw
                 except Exception:
                     dt = None
-
+            
             if isinstance(dt, datetime) and dt.tzinfo is not None:
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-
+            
             return dt or d.updated_at or d.discovered_at or datetime.min
-
+        
         def schema_key(asset: Asset):
             cols = normalize_columns(asset.columns or [])
             names = []
@@ -595,43 +594,284 @@ def deduplicate_discoveries_by_schema():
                 if not n:
                     continue
                 names.append(str(n).strip().lower())
-            # Use set to avoid duplicates; sort for stable grouping
             return tuple(sorted(set(names)))
-
-        groups = {}
-        for d in discoveries:
-            if not d.asset:
-                continue
-            key = schema_key(d.asset)
-            if not key:
-                continue
-            groups.setdefault(key, []).append(d)
-
+        
+        # STREAMING READ: Process in batches to avoid loading 100k rows at once
+        BATCH_SIZE = 5000
+        groups = {}  # schema_key -> [(discovery_id, last_modified), ...]
+        total_discoveries = 0
+        offset = 0
+        
+        logger.info('FN:_run_deduplication_worker job_id:{} starting_streaming_read batch_size:{}'.format(
+            job_id, BATCH_SIZE
+        ))
+        
+        while True:
+            # Fetch batch
+            batch = (
+                db.query(DataDiscovery)
+                .options(joinedload(DataDiscovery.asset).load_only(Asset.columns))
+                .filter(
+                    DataDiscovery.is_visible.is_(True),
+                    DataDiscovery.asset_id.isnot(None),
+                )
+                .order_by(DataDiscovery.id)
+                .limit(BATCH_SIZE)
+                .offset(offset)
+                .all()
+            )
+            
+            if not batch:
+                break
+            
+            # Process batch: build schema groups (only store id + timestamp, not full objects)
+            for d in batch:
+                if not d.asset:
+                    continue
+                key = schema_key(d.asset)
+                if not key:
+                    continue
+                
+                last_mod = parse_last_modified(d)
+                if key not in groups:
+                    groups[key] = []
+                groups[key].append((d.id, last_mod))
+                total_discoveries += 1
+            
+            offset += BATCH_SIZE
+            
+            # Update progress
+            job.total_discoveries = total_discoveries
+            # Estimate progress (we don't know total until done, so use a rough estimate)
+            db.commit()
+            
+            logger.debug('FN:_run_deduplication_worker job_id:{} processed_batch offset:{} discoveries:{}'.format(
+                job_id, offset, total_discoveries
+            ))
+        
+        job.total_discoveries = total_discoveries
+        db.commit()
+        
+        # Process groups: find duplicates and prepare updates
+        updates_list = []
         hidden = 0
         groups_deduped = 0
-
-        for _, ds in groups.items():
-            if len(ds) <= 1:
+        
+        for key, items in groups.items():
+            if len(items) <= 1:
                 continue
+            
             groups_deduped += 1
-
-            # Keep the latest modified discovery visible.
-            ds_sorted = sorted(ds, key=parse_last_modified, reverse=True)
-            for dup in ds_sorted[1:]:
-                dup.is_visible = False
+            # Sort by last_modified descending (latest first)
+            items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
+            
+            # Keep first (latest), hide rest
+            for discovery_id, _ in items_sorted[1:]:
+                updates_list.append({
+                    'id': discovery_id,
+                    'is_visible': False
+                })
                 hidden += 1
-
-        db.commit()
-
-        logger.info('FN:deduplicate_discoveries_by_schema groups_deduped:{} hidden:{}'.format(
-            groups_deduped, hidden
+        
+        # CHUNKED BULK UPDATES: Update in chunks to avoid huge transactions
+        UPDATE_CHUNK_SIZE = 2000
+        total_updates = len(updates_list)
+        
+        logger.info('FN:_run_deduplication_worker job_id:{} applying_updates total:{} chunk_size:{}'.format(
+            job_id, total_updates, UPDATE_CHUNK_SIZE
         ))
+        
+        for i in range(0, total_updates, UPDATE_CHUNK_SIZE):
+            chunk = updates_list[i:i + UPDATE_CHUNK_SIZE]
+            db.bulk_update_mappings(DataDiscovery, chunk)
+            db.commit()
+            
+            # Update progress
+            job.hidden_count = min(i + len(chunk), total_updates)
+            job.progress_percent = min(100.0, (job.hidden_count / total_updates * 100) if total_updates > 0 else 100.0)
+            db.commit()
+            
+            logger.debug('FN:_run_deduplication_worker job_id:{} update_chunk progress:{}/{}'.format(
+                job_id, job.hidden_count, total_updates
+            ))
+        
+        # Finalize job
+        total_time = time.time() - start_time
+        job.status = 'completed'
+        job.groups_deduped = groups_deduped
+        job.hidden_count = hidden
+        job.progress_percent = 100.0
+        job.completed_at = datetime.utcnow()
+        db.commit()
+        
+        logger.info('FN:_run_deduplication_worker job_id:{} completed total_time:{:.2f}s total_discoveries:{} groups_deduped:{} hidden:{}'.format(
+            job_id, total_time, total_discoveries, groups_deduped, hidden
+        ))
+        
+    except Exception as e:
+        db.rollback()
+        try:
+            job = db.query(DeduplicationJob).filter(DeduplicationJob.id == job_id).first()
+            if job:
+                job.status = 'failed'
+                job.error_message = str(e)[:1000]  # Truncate long errors
+                job.completed_at = datetime.utcnow()
+                db.commit()
+        except:
+            pass
+        logger.error('FN:_run_deduplication_worker job_id:{} error:{}'.format(job_id, str(e)), exc_info=True)
+    finally:
+        db.close()
 
+
+@discovery_bp.route('/api/discovery/deduplicate', methods=['POST'])
+@handle_error
+def deduplicate_discoveries_by_schema():
+    """
+    Hide duplicate discovered assets by schema (column names).
+    
+    For small datasets (<5000): Runs synchronously (fast response).
+    For large datasets (>=5000): Runs asynchronously (returns job_id, poll for status).
+    
+    SCALABLE to 100k+ files:
+    - Streaming/batched reads (processes in 5k chunks)
+    - Chunked bulk updates (2k per transaction)
+    - Background processing for large datasets
+    """
+    db = SessionLocal()
+    try:
+        # Check total visible discoveries to decide sync vs async
+        total_count = (
+            db.query(DataDiscovery)
+            .filter(
+                DataDiscovery.is_visible.is_(True),
+                DataDiscovery.asset_id.isnot(None),
+            )
+            .count()
+        )
+        
+        # For small datasets (<5000), run synchronously (fast path)
+        if total_count < 5000:
+            # Use original fast path logic (simplified version)
+            import time
+            start_time = time.time()
+            
+            discoveries = (
+                db.query(DataDiscovery)
+                .options(joinedload(DataDiscovery.asset).load_only(Asset.columns))
+                .filter(
+                    DataDiscovery.is_visible.is_(True),
+                    DataDiscovery.asset_id.isnot(None),
+                )
+                .all()
+            )
+            
+            def parse_last_modified(d: DataDiscovery):
+                file_metadata = d.file_metadata or {}
+                timestamps = (file_metadata.get("timestamps") or {}) if isinstance(file_metadata, dict) else {}
+                storage_metadata = d.storage_metadata or {}
+                azure = (storage_metadata.get("azure") or {}) if isinstance(storage_metadata, dict) else {}
+                raw = timestamps.get("last_modified") or azure.get("last_modified")
+                dt = None
+                if raw:
+                    try:
+                        if isinstance(raw, str):
+                            if raw.endswith('Z'):
+                                raw = raw.replace('Z', '+00:00')
+                            if 'T' in raw:
+                                dt = datetime.fromisoformat(raw)
+                            else:
+                                dt = datetime.strptime(raw, '%Y-%m-%d')
+                        elif hasattr(raw, 'tzinfo') or hasattr(raw, 'strftime'):
+                            dt = raw
+                    except Exception:
+                        dt = None
+                if isinstance(dt, datetime) and dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                return dt or d.updated_at or d.discovered_at or datetime.min
+            
+            def schema_key(asset: Asset):
+                cols = normalize_columns(asset.columns or [])
+                names = []
+                for c in cols:
+                    if not isinstance(c, dict):
+                        continue
+                    n = c.get("name")
+                    if not n:
+                        continue
+                    names.append(str(n).strip().lower())
+                return tuple(sorted(set(names)))
+            
+            groups = {}
+            for d in discoveries:
+                if not d.asset:
+                    continue
+                key = schema_key(d.asset)
+                if not key:
+                    continue
+                groups.setdefault(key, []).append((d.id, parse_last_modified(d)))
+            
+            updates_list = []
+            hidden = 0
+            groups_deduped = 0
+            
+            for _, items in groups.items():
+                if len(items) <= 1:
+                    continue
+                groups_deduped += 1
+                items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
+                for discovery_id, _ in items_sorted[1:]:
+                    updates_list.append({'id': discovery_id, 'is_visible': False})
+                    hidden += 1
+            
+            if updates_list:
+                # Chunk updates even for small datasets
+                CHUNK_SIZE = 2000
+                for i in range(0, len(updates_list), CHUNK_SIZE):
+                    chunk = updates_list[i:i + CHUNK_SIZE]
+                    db.bulk_update_mappings(DataDiscovery, chunk)
+                db.commit()
+            
+            total_time = time.time() - start_time
+            
+            logger.info('FN:deduplicate_discoveries_by_schema sync_mode total_time:{:.2f}s total_discoveries:{} groups_deduped:{} hidden:{}'.format(
+                total_time, len(discoveries), groups_deduped, hidden
+            ))
+            
+            return jsonify({
+                "success": True,
+                "job_id": None,  # No job for sync mode
+                "groups_deduped": groups_deduped,
+                "hidden": hidden,
+                "total_processed": len(discoveries),
+                "processing_time_seconds": round(total_time, 2)
+            }), 200
+        
+        # For large datasets (>=5000), run asynchronously
+        job = DeduplicationJob(
+            status='queued',
+            total_discoveries=total_count
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.id
+        
+        # Start background thread
+        thread = threading.Thread(target=_run_deduplication_worker, args=(job_id,), daemon=True)
+        thread.start()
+        
+        logger.info('FN:deduplicate_discoveries_by_schema async_mode job_id:{} total_discoveries:{}'.format(
+            job_id, total_count
+        ))
+        
         return jsonify({
             "success": True,
-            "groups_deduped": groups_deduped,
-            "hidden": hidden,
-        }), 200
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Deduplication started. Use /api/discovery/deduplicate/status/<job_id> to check progress.",
+            "total_discoveries": total_count
+        }), 202  # 202 Accepted for async operations
+        
     except Exception as e:
         db.rollback()
         logger.error('FN:deduplicate_discoveries_by_schema error:{}'.format(str(e)), exc_info=True)
@@ -640,27 +880,76 @@ def deduplicate_discoveries_by_schema():
         db.close()
 
 
+@discovery_bp.route('/api/discovery/deduplicate/status/<int:job_id>', methods=['GET'])
+@handle_error
+def get_deduplication_status(job_id: int):
+    """Get status of a deduplication job."""
+    db = SessionLocal()
+    try:
+        job = db.query(DeduplicationJob).filter(DeduplicationJob.id == job_id).first()
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        
+        return jsonify({
+            "job_id": job.id,
+            "status": job.status,
+            "total_discoveries": job.total_discoveries,
+            "groups_deduped": job.groups_deduped,
+            "hidden_count": job.hidden_count,
+            "progress_percent": float(job.progress_percent) if job.progress_percent else 0.0,
+            "error_message": job.error_message,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+        }), 200
+    except Exception as e:
+        logger.error('FN:get_deduplication_status job_id:{} error:{}'.format(job_id, str(e)), exc_info=True)
+        return jsonify({"error": str(e)}), 400
+    finally:
+        db.close()
+
+
 @discovery_bp.route('/api/discovery/duplicates/hidden', methods=['GET'])
 @handle_error
 def list_hidden_duplicates():
-    """List hidden discoveries so users can review/restore them."""
+    """List hidden discoveries so users can review/restore them. Supports pagination."""
     db = SessionLocal()
     try:
-        limit = request.args.get('limit', type=int, default=500)
-        if limit < 1:
-            limit = 1
-        if limit > 5000:
-            limit = 5000
+        # Pagination parameters
+        page = request.args.get('page', type=int, default=1)
+        per_page = request.args.get('per_page', type=int, default=50)
+        
+        # Validate pagination
+        if page < 1:
+            page = 1
+        if per_page < 1:
+            per_page = 1
+        if per_page > 500:
+            per_page = 500
+        
+        offset = (page - 1) * per_page
 
+        # Get total count for pagination
+        total_count = (
+            db.query(DataDiscovery)
+            .filter(
+                DataDiscovery.is_visible.is_(False),
+                DataDiscovery.asset_id.isnot(None),
+            )
+            .count()
+        )
+
+        # Get paginated results
         hidden = (
             db.query(DataDiscovery)
-            .options(joinedload(DataDiscovery.asset))
+            .options(joinedload(DataDiscovery.asset).load_only(Asset.columns))
             .filter(
                 DataDiscovery.is_visible.is_(False),
                 DataDiscovery.asset_id.isnot(None),
             )
             .order_by(DataDiscovery.updated_at.desc(), DataDiscovery.id.desc())
-            .limit(limit)
+            .limit(per_page)
+            .offset(offset)
             .all()
         )
 
@@ -708,8 +997,15 @@ def list_hidden_duplicates():
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
             })
 
+        total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 0
+        
         return jsonify({
-            "total": len(results),
+            "total": total_count,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
             "hidden_duplicates": results,
         }), 200
     finally:

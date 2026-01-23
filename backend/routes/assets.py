@@ -335,7 +335,6 @@ def get_assets():
             "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata,
             "columns": normalize_columns(asset.columns or []),
-            "custom_columns": asset.custom_columns or {},
             "application_name": application_name  # From connection config
             }
             if discovery:
@@ -501,7 +500,6 @@ def get_asset_by_id(asset_id):
             "connector_id": asset.connector_id,
             "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
             "columns": columns,
-            "custom_columns": asset.custom_columns or {},
             "technical_metadata": asset.technical_metadata or {},
             "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata or {},
@@ -572,9 +570,6 @@ def update_asset(asset_id):
         if 'columns' in data:
             asset.columns = data['columns']
             flag_modified(asset, "columns")
-        if 'custom_columns' in data:
-            asset.custom_columns = data['custom_columns']
-            flag_modified(asset, "custom_columns")
 
         db.commit()
         # OPTIMIZATION: Remove unnecessary refresh - data already in session after commit
@@ -591,8 +586,7 @@ def update_asset(asset_id):
             "technical_metadata": asset.technical_metadata,
             "operational_metadata": asset.operational_metadata,
             "business_metadata": asset.business_metadata,
-            "columns": asset.columns,
-            "custom_columns": asset.custom_columns or {}
+            "columns": asset.columns
         }), 200
     except Exception as e:
         db.rollback()

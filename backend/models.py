@@ -23,7 +23,6 @@ class Asset(Base):
     operational_metadata = Column(JSON)
     business_metadata = Column(JSON)
     columns = Column(JSON)
-    custom_columns = Column(JSON)  # Custom user-defined columns: { columnId: { label: string, values: { columnName: value } } }
     
 
     source_lineage = relationship("LineageRelationship", foreign_keys="LineageRelationship.source_asset_id", back_populates="source_asset")
@@ -167,4 +166,20 @@ class DataDiscovery(Base):
     
 
     asset = relationship("Asset", foreign_keys=[asset_id])
+
+
+class DeduplicationJob(Base):
+    __tablename__ = "deduplication_jobs"
+    
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    status = Column(String(50), default='queued', nullable=False)  # queued, running, completed, failed
+    total_discoveries = Column(Integer, default=0)
+    groups_deduped = Column(Integer, default=0)
+    hidden_count = Column(Integer, default=0)
+    progress_percent = Column(DECIMAL(5, 2), default=0.0)
+    error_message = Column(Text)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

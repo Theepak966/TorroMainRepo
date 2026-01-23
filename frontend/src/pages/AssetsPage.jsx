@@ -30,6 +30,7 @@ import {
   Divider,
   Alert,
   CircularProgress,
+  LinearProgress,
   Pagination,
   Stack,
   RadioGroup,
@@ -102,19 +103,21 @@ const AssetsPage = () => {
   const [exportAnchorEl, setExportAnchorEl] = useState(null);
   const [selectedColumns, setSelectedColumns] = useState([]);
   const [showColumnCheckboxes, setShowColumnCheckboxes] = useState(false);
-  
-  // Custom columns state
-  const [addColumnDialogOpen, setAddColumnDialogOpen] = useState(false);
-  const [newColumnLabel, setNewColumnLabel] = useState('');
-  const [customColumns, setCustomColumns] = useState({}); // { columnId: { label: string, values: { columnName: value } } }
-  const [editingCustomValue, setEditingCustomValue] = useState(null); // { columnId, columnName }
-  const [customValueInput, setCustomValueInput] = useState('');
 
   // Hidden duplicates review
   const [hiddenDuplicatesOpen, setHiddenDuplicatesOpen] = useState(false);
   const [hiddenDuplicatesLoading, setHiddenDuplicatesLoading] = useState(false);
   const [hiddenDuplicates, setHiddenDuplicates] = useState([]);
+  const [hiddenDuplicatesPage, setHiddenDuplicatesPage] = useState(1);
+  const [hiddenDuplicatesPerPage, setHiddenDuplicatesPerPage] = useState(50);
+  const [hiddenDuplicatesTotal, setHiddenDuplicatesTotal] = useState(0);
+  const [hiddenDuplicatesTotalPages, setHiddenDuplicatesTotalPages] = useState(0);
   const [removeDuplicatesMenuAnchor, setRemoveDuplicatesMenuAnchor] = useState(null);
+  
+  // Deduplication job status
+  const [deduplicationJobId, setDeduplicationJobId] = useState(null);
+  const [deduplicationStatus, setDeduplicationStatus] = useState(null);
+  const [deduplicationProgressOpen, setDeduplicationProgressOpen] = useState(false);
   
   // Default metadata field visibility (all visible by default)
   // Only includes fields that are actually displayed in the UI and controlled by visibility settings
@@ -392,13 +395,6 @@ const AssetsPage = () => {
         // Merge with existing to preserve unsaved changes for other assets
         return { ...prev, ...initialMaskingLogic };
       });
-      
-      // Load custom columns from asset
-      if (selectedAsset.custom_columns) {
-        setCustomColumns(selectedAsset.custom_columns);
-      } else {
-        setCustomColumns({});
-      }
     }
   }, [selectedAsset]);
 
@@ -1180,49 +1176,6 @@ const AssetsPage = () => {
   };
 
 
-  // Handler to add custom column
-  const handleAddCustomColumn = async () => {
-    if (!selectedAsset || !newColumnLabel.trim()) return;
-    
-    const columnId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const updatedCustomColumns = {
-      ...customColumns,
-      [columnId]: {
-        label: newColumnLabel.trim(),
-        values: {}
-      }
-    };
-    
-    setCustomColumns(updatedCustomColumns);
-    
-    try {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const response = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ custom_columns: updatedCustomColumns })
-      });
-      
-      if (response.ok) {
-        // Refresh asset
-        const assetResponse = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`);
-        if (assetResponse.ok) {
-          const updatedAsset = await assetResponse.json();
-          setSelectedAsset(updatedAsset);
-        }
-        setAddColumnDialogOpen(false);
-        setNewColumnLabel('');
-      } else {
-        throw new Error('Failed to add custom column');
-      }
-    } catch (err) {
-      console.error('Failed to add custom column:', err);
-      alert('Failed to add custom column: ' + err.message);
-      // Revert on error
-      setCustomColumns(customColumns);
-    }
-  };
-
   // Handler to save masking logic changes directly from table
   const handleSaveMaskingLogic = async (columnName) => {
     if (!selectedAsset) return;
@@ -1597,16 +1550,19 @@ const AssetsPage = () => {
     return num.toLocaleString();
   };
 
-  const fetchHiddenDuplicates = async () => {
+  const fetchHiddenDuplicates = async (page = hiddenDuplicatesPage) => {
     setHiddenDuplicatesLoading(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      const resp = await fetch(`${API_BASE_URL}/api/discovery/duplicates/hidden?limit=500`);
+      const resp = await fetch(`${API_BASE_URL}/api/discovery/duplicates/hidden?page=${page}&per_page=${hiddenDuplicatesPerPage}`);
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         throw new Error(data?.error || 'Failed to load hidden duplicates');
       }
       setHiddenDuplicates(Array.isArray(data?.hidden_duplicates) ? data.hidden_duplicates : []);
+      setHiddenDuplicatesTotal(data?.total || 0);
+      setHiddenDuplicatesTotalPages(data?.total_pages || 0);
+      setHiddenDuplicatesPage(page);
     } catch (e) {
       console.error('Error loading hidden duplicates:', e);
       alert(`Error: ${e?.message || 'Failed to load hidden duplicates'}`);
@@ -1614,6 +1570,53 @@ const AssetsPage = () => {
     } finally {
       setHiddenDuplicatesLoading(false);
     }
+  };
+
+  const pollDeduplicationStatus = async (jobId) => {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+    const maxAttempts = 600; // 10 minutes max (1s intervals)
+    let attempts = 0;
+    
+    const poll = async () => {
+      try {
+        const resp = await fetch(`${API_BASE_URL}/api/discovery/deduplicate/status/${jobId}`);
+        const data = await resp.json().catch(() => ({}));
+        
+        if (!resp.ok) {
+          throw new Error(data?.error || 'Failed to fetch job status');
+        }
+        
+        setDeduplicationStatus(data);
+        
+        if (data.status === 'completed') {
+          setDeduplicationProgressOpen(false);
+          alert(`Deduplication complete. Hidden ${data.hidden_count || 0} duplicate asset(s).`);
+          setCurrentPage(0);
+          await fetchAssets(0);
+          setDeduplicationJobId(null);
+        } else if (data.status === 'failed') {
+          setDeduplicationProgressOpen(false);
+          alert(`Deduplication failed: ${data.error_message || 'Unknown error'}`);
+          setDeduplicationJobId(null);
+        } else if (data.status === 'running' || data.status === 'queued') {
+          attempts++;
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 1000); // Poll every 1 second
+          } else {
+            setDeduplicationProgressOpen(false);
+            alert('Deduplication is taking longer than expected. Please check status manually.');
+            setDeduplicationJobId(null);
+          }
+        }
+      } catch (error) {
+        console.error('Error polling deduplication status:', error);
+        setDeduplicationProgressOpen(false);
+        alert(`Error: ${error?.message || 'Failed to check deduplication status'}`);
+        setDeduplicationJobId(null);
+      }
+    };
+    
+    poll();
   };
 
   const restoreHiddenDuplicate = async (discoveryId) => {
@@ -1788,16 +1791,24 @@ const AssetsPage = () => {
                   if (!resp.ok) {
                     throw new Error(payload?.error || 'Failed to deduplicate discoveries');
                   }
-                  const hidden = payload?.hidden ?? 0;
-                  setCurrentPage(0);
-                  await fetchAssets(0);
                   
-                  // Automatically open hidden duplicates dialog if any were hidden
-                  if (hidden > 0) {
-                    setHiddenDuplicatesOpen(true);
-                    await fetchHiddenDuplicates();
+                  // Check if async (job_id present) or sync (immediate result)
+                  if (payload.job_id) {
+                    // Async mode: start polling
+                    setDeduplicationJobId(payload.job_id);
+                    setDeduplicationStatus({
+                      status: payload.status || 'queued',
+                      total_discoveries: payload.total_discoveries || 0,
+                      progress_percent: 0
+                    });
+                    setDeduplicationProgressOpen(true);
+                    pollDeduplicationStatus(payload.job_id);
                   } else {
-                    alert(`Deduplication complete. No duplicates found to hide.`);
+                    // Sync mode: immediate result
+                    const hidden = payload?.hidden ?? 0;
+                    alert(`Deduplication complete. Hidden ${hidden} duplicate asset(s).`);
+                    setCurrentPage(0);
+                    await fetchAssets(0);
                   }
                 } catch (error) {
                   console.error('Error deduplicating discoveries:', error);
@@ -1813,7 +1824,8 @@ const AssetsPage = () => {
               onClick={async () => {
                 setRemoveDuplicatesMenuAnchor(null);
                 setHiddenDuplicatesOpen(true);
-                await fetchHiddenDuplicates();
+                setHiddenDuplicatesPage(1);
+                await fetchHiddenDuplicates(1);
               }}
             >
               View hidden duplicates
@@ -1821,6 +1833,66 @@ const AssetsPage = () => {
           </Menu>
         </Box>
       </Box>
+
+      <Dialog
+        open={deduplicationProgressOpen}
+        onClose={() => {}}
+        disableEscapeKeyDown
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Deduplicating Assets</DialogTitle>
+        <DialogContent>
+          <Box sx={{ py: 2 }}>
+            {deduplicationStatus && (
+              <>
+                <Typography variant="body1" gutterBottom>
+                  Status: <strong>{deduplicationStatus.status === 'queued' ? 'Queued' : deduplicationStatus.status === 'running' ? 'Processing...' : deduplicationStatus.status}</strong>
+                </Typography>
+                {deduplicationStatus.total_discoveries > 0 && (
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Processing {deduplicationStatus.total_discoveries.toLocaleString()} assets...
+                  </Typography>
+                )}
+                {deduplicationStatus.progress_percent > 0 && (
+                  <>
+                    <Box sx={{ mt: 2, mb: 1 }}>
+                      <LinearProgress variant="determinate" value={deduplicationStatus.progress_percent} sx={{ mb: 1 }} />
+                      <Typography variant="body2" color="text.secondary">
+                        {deduplicationStatus.progress_percent.toFixed(1)}% complete
+                      </Typography>
+                    </Box>
+                    {deduplicationStatus.hidden_count > 0 && (
+                      <Typography variant="body2" color="text.secondary">
+                        Hidden so far: {deduplicationStatus.hidden_count.toLocaleString()}
+                      </Typography>
+                    )}
+                  </>
+                )}
+                {deduplicationStatus.status === 'queued' && (
+                  <Box sx={{ mt: 2 }}>
+                    <CircularProgress />
+                  </Box>
+                )}
+                {deduplicationStatus.status === 'running' && deduplicationStatus.progress_percent === 0 && (
+                  <Box sx={{ mt: 2 }}>
+                    <CircularProgress />
+                  </Box>
+                )}
+              </>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            setDeduplicationProgressOpen(false);
+            setDeduplicationJobId(null);
+            setDeduplicationStatus(null);
+          }} disabled={deduplicationStatus?.status === 'running'}>
+            {deduplicationStatus?.status === 'running' ? 'Processing...' : 'Close'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={hiddenDuplicatesOpen}
@@ -1878,8 +1950,24 @@ const AssetsPage = () => {
             </TableContainer>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setHiddenDuplicatesOpen(false)}>Close</Button>
+        <DialogActions sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 2, py: 1 }}>
+          <Box>
+            <Typography variant="body2" color="text.secondary">
+              Showing {hiddenDuplicates.length > 0 ? ((hiddenDuplicatesPage - 1) * hiddenDuplicatesPerPage + 1) : 0} - {Math.min(hiddenDuplicatesPage * hiddenDuplicatesPerPage, hiddenDuplicatesTotal)} of {hiddenDuplicatesTotal}
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Pagination
+              count={hiddenDuplicatesTotalPages}
+              page={hiddenDuplicatesPage}
+              onChange={(e, newPage) => fetchHiddenDuplicates(newPage)}
+              color="primary"
+              size="small"
+              showFirstButton
+              showLastButton
+            />
+            <Button onClick={() => setHiddenDuplicatesOpen(false)}>Close</Button>
+          </Box>
         </DialogActions>
       </Dialog>
 
@@ -3427,14 +3515,6 @@ const AssetsPage = () => {
                       )}
                       <Button
                         variant="outlined"
-                        color="primary"
-                        startIcon={<Add />}
-                        onClick={() => setAddColumnDialogOpen(true)}
-                      >
-                        Add Column
-                      </Button>
-                      <Button
-                        variant="outlined"
                         startIcon={<FileDownload />}
                         endIcon={<ArrowDropDown />}
                         onClick={(e) => setExportAnchorEl(e.currentTarget)}
@@ -3523,48 +3603,6 @@ const AssetsPage = () => {
                                   <TableCell>Nullable</TableCell>
                                   <TableCell>Description</TableCell>
                                   <TableCell>PII Status</TableCell>
-                                  {/* Custom columns headers */}
-                                  {Object.entries(customColumns).map(([columnId, customCol]) => (
-                                    <TableCell key={columnId}>
-                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                        {customCol.label}
-                                        <IconButton
-                                          size="small"
-                                          onClick={async () => {
-                                            if (confirm(`Delete custom column "${customCol.label}"?`)) {
-                                              const updatedCustomColumns = { ...customColumns };
-                                              delete updatedCustomColumns[columnId];
-                                              setCustomColumns(updatedCustomColumns);
-                                              
-                                              // Save to backend
-                                              if (selectedAsset) {
-                                                try {
-                                                  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                                                  await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
-                                                    method: 'PUT',
-                                                    headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify({ custom_columns: updatedCustomColumns })
-                                                  });
-                                                  // Refresh asset
-                                                  const assetResponse = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`);
-                                                  if (assetResponse.ok) {
-                                                    const updatedAsset = await assetResponse.json();
-                                                    setSelectedAsset(updatedAsset);
-                                                  }
-                                                } catch (err) {
-                                                  console.error('Failed to delete custom column:', err);
-                                                  alert('Failed to delete custom column');
-                                                }
-                                              }
-                                            }
-                                          }}
-                                          sx={{ ml: 0.5 }}
-                                        >
-                                          <Close fontSize="small" />
-                                        </IconButton>
-                                      </Box>
-                                    </TableCell>
-                                  ))}
                                   {hasPiiOrChanging && (
                                     <>
                                       <TableCell>Masking logic (Analytical User)</TableCell>
@@ -3732,87 +3770,6 @@ const AssetsPage = () => {
                                           />
                                         )}
                                       </TableCell>
-                                      {/* Custom columns cells */}
-                                      {Object.entries(customColumns).map(([columnId, customCol]) => {
-                                        const isEditing = editingCustomValue?.columnId === columnId && editingCustomValue?.columnName === column.name;
-                                        const currentValue = customCol.values?.[column.name] || '';
-                                        
-                                        return (
-                                          <TableCell key={columnId}>
-                                            {isEditing ? (
-                                              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                                                <TextField
-                                                  size="small"
-                                                  value={customValueInput}
-                                                  onChange={(e) => setCustomValueInput(e.target.value)}
-                                                  onBlur={async () => {
-                                                    // Save value
-                                                    const updatedCustomColumns = {
-                                                      ...customColumns,
-                                                      [columnId]: {
-                                                        ...customCol,
-                                                        values: {
-                                                          ...(customCol.values || {}),
-                                                          [column.name]: customValueInput
-                                                        }
-                                                      }
-                                                    };
-                                                    setCustomColumns(updatedCustomColumns);
-                                                    setEditingCustomValue(null);
-                                                    
-                                                    // Save to backend
-                                                    if (selectedAsset) {
-                                                      try {
-                                                        const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                                                        await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
-                                                          method: 'PUT',
-                                                          headers: { 'Content-Type': 'application/json' },
-                                                          body: JSON.stringify({ custom_columns: updatedCustomColumns })
-                                                        });
-                                                        // Refresh asset
-                                                        const assetResponse = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`);
-                                                        if (assetResponse.ok) {
-                                                          const updatedAsset = await assetResponse.json();
-                                                          setSelectedAsset(updatedAsset);
-                                                        }
-                                                      } catch (err) {
-                                                        console.error('Failed to save custom column value:', err);
-                                                        alert('Failed to save value');
-                                                      }
-                                                    }
-                                                  }}
-                                                  onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') {
-                                                      e.target.blur();
-                                                    } else if (e.key === 'Escape') {
-                                                      setEditingCustomValue(null);
-                                                      setCustomValueInput('');
-                                                    }
-                                                  }}
-                                                  autoFocus
-                                                  sx={{ minWidth: 150 }}
-                                                />
-                                              </Box>
-                                            ) : (
-                                              <Typography
-                                                variant="body2"
-                                                onClick={() => {
-                                                  setEditingCustomValue({ columnId, columnName: column.name });
-                                                  setCustomValueInput(currentValue);
-                                                }}
-                                                sx={{
-                                                  cursor: 'pointer',
-                                                  color: currentValue ? 'text.primary' : 'text.secondary',
-                                                  '&:hover': { textDecoration: 'underline' },
-                                                  minHeight: '20px'
-                                                }}
-                                              >
-                                                {currentValue || 'Click to add'}
-                                              </Typography>
-                                            )}
-                                          </TableCell>
-                                        );
-                                      })}
                                       {hasPiiOrChanging && (() => {
                                         if (!selectedAsset) return null;
                                         
@@ -4199,49 +4156,6 @@ const AssetsPage = () => {
             startIcon={savingPii ? <CircularProgress size={20} /> : null}
           >
             {savingPii ? 'Saving...' : 'Save'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Add Custom Column Dialog */}
-      <Dialog open={addColumnDialogOpen} onClose={() => {
-        setAddColumnDialogOpen(false);
-        setNewColumnLabel('');
-      }} maxWidth="sm" fullWidth>
-        <DialogTitle>Add Custom Column</DialogTitle>
-        <DialogContent>
-          <Box sx={{ mt: 2 }}>
-            <TextField
-              fullWidth
-              label="Column Label"
-              value={newColumnLabel}
-              onChange={(e) => setNewColumnLabel(e.target.value)}
-              placeholder="Enter column label (e.g., Notes, Tags, etc.)"
-              variant="outlined"
-              autoFocus
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && newColumnLabel.trim()) {
-                  e.preventDefault();
-                  handleAddCustomColumn();
-                }
-              }}
-            />
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setAddColumnDialogOpen(false);
-            setNewColumnLabel('');
-          }}>
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleAddCustomColumn}
-            variant="contained" 
-            color="primary"
-            disabled={!newColumnLabel.trim()}
-          >
-            Add Column
           </Button>
         </DialogActions>
       </Dialog>
