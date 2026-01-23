@@ -198,14 +198,32 @@ def get_assets():
 
         # Hide assets that have discoveries but none of them are visible (e.g. deduplicated-away).
         # Still allow assets with no discovery record at all (e.g., non-DataDiscovery sources).
-        any_discovery_subq = (
-            db.query(DataDiscovery.asset_id.label("asset_id"))
+        # Logic: Show assets if they have a visible discovery OR they have no discoveries at all
+        from sqlalchemy import and_
+        # Subquery to find assets that have any discoveries
+        assets_with_any_discovery = (
+            db.query(DataDiscovery.asset_id)
             .filter(DataDiscovery.asset_id.isnot(None))
             .distinct()
             .subquery()
         )
-        query = query.outerjoin(any_discovery_subq, Asset.id == any_discovery_subq.c.asset_id)
-        query = query.filter(or_(DataDiscovery.id.isnot(None), any_discovery_subq.c.asset_id.is_(None)))
+        
+        # Use LEFT JOIN to check if asset has any discoveries
+        query = query.outerjoin(
+            assets_with_any_discovery,
+            Asset.id == assets_with_any_discovery.c.asset_id
+        )
+        
+        # Filter: Show if has visible discovery OR has no discoveries at all
+        query = query.filter(
+            or_(
+                DataDiscovery.id.isnot(None),  # Has visible discovery
+                and_(
+                    DataDiscovery.id.is_(None),  # No visible discovery
+                    assets_with_any_discovery.c.asset_id.is_(None)  # No discoveries at all
+                )
+            )
+        )
         
         # Apply filters at database level (before pagination)
         if search_term:
