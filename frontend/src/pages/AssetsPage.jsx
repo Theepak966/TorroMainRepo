@@ -1789,9 +1789,16 @@ const AssetsPage = () => {
                     throw new Error(payload?.error || 'Failed to deduplicate discoveries');
                   }
                   const hidden = payload?.hidden ?? 0;
-                  alert(`Deduplication complete. Hidden ${hidden} duplicate asset(s).`);
                   setCurrentPage(0);
                   await fetchAssets(0);
+                  
+                  // Automatically open hidden duplicates dialog if any were hidden
+                  if (hidden > 0) {
+                    setHiddenDuplicatesOpen(true);
+                    await fetchHiddenDuplicates();
+                  } else {
+                    alert(`Deduplication complete. No duplicates found to hide.`);
+                  }
                 } catch (error) {
                   console.error('Error deduplicating discoveries:', error);
                   alert(`Error: ${error?.message || 'Failed to deduplicate discoveries'}`);
