@@ -648,10 +648,11 @@ const AssetsPage = () => {
   const handleOpenStarburstDialog = (asset) => {
     if (!asset) return;
     setStarburstAsset(asset);
-    setStarburstCatalog(asset.catalog || '');
+    // Do not pre-fill catalog/schema/table so user can choose exact Starburst objects
+    setStarburstCatalog('');
     setStarburstSchema('');
-    setStarburstTableName(asset.name || '');
-    setStarburstViewName(`${asset.name || 'masked_view'}_masked`);
+    setStarburstTableName('');
+    setStarburstViewName(`${asset.name || 'table'}_masked_analytical`);
     setStarburstHost('');
     setStarburstPort('443');
     setStarburstUser('');
@@ -2214,8 +2215,8 @@ const AssetsPage = () => {
                   size="small"
                   value={starburstViewName}
                   onChange={(e) => setStarburstViewName(e.target.value)}
-                  placeholder={`${starburstAsset?.name || 'table'}_masked`}
-                  helperText="Masked view name to create"
+                  placeholder={`${starburstAsset?.name || 'table'}_masked_analytical`}
+                  helperText="Analytical masked view name (operational view will use the same base name with _operational)"
                 />
               </Grid>
             </Grid>

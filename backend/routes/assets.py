@@ -1169,7 +1169,8 @@ def ingest_asset_to_starburst(asset_id):
         catalog = (payload.get("catalog") or "").strip()
         schema = (payload.get("schema") or "").strip()
         table_name = (payload.get("table_name") or "").strip() or asset.name
-        base_view_name = (payload.get("view_name") or "").strip() or f"{table_name}_masked"
+
+        raw_view_name = (payload.get("view_name") or "").strip()
 
         if not catalog or not schema:
             return jsonify({"error": "Both catalog and schema are required"}), 400
@@ -1224,8 +1225,17 @@ def ingest_asset_to_starburst(asset_id):
                 return jsonify({"error": f"Starburst authentication failed: {str(e)}"}), 400
 
         try:
-            analytical_view_name = base_view_name
-            operational_view_name = f"{base_view_name}_operational"
+            # Derive analytical and operational view names from the base table / user input.
+            if raw_view_name:
+                analytical_view_name = raw_view_name
+                suffix = "_analytical"
+                if raw_view_name.endswith(suffix):
+                    operational_view_name = raw_view_name[: -len(suffix)] + "_operational"
+                else:
+                    operational_view_name = f"{raw_view_name}_operational"
+            else:
+                analytical_view_name = f"{table_name}_masked_analytical"
+                operational_view_name = f"{table_name}_masked_operational"
 
             analytical_sql, analytical_summary = generate_starburst_masked_view_sql(
                 asset,
