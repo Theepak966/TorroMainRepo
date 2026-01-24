@@ -25,3 +25,5 @@ requests==2.31.0
 # oracledb>=1.4.0  # Recommended: Official Oracle driver (newer)
 # cx_Oracle>=8.3.0  # Alternative: Legacy Oracle driver
 
+# Starburst / Trino client
+trino

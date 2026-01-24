@@ -65,6 +65,7 @@ import {
   Settings,
   ArrowDropDown,
   FileDownload,
+  CloudUpload,
 } from '@mui/icons-material';
 
 const AssetsPage = () => {
@@ -125,6 +126,23 @@ const AssetsPage = () => {
   const [deduplicationJobId, setDeduplicationJobId] = useState(null);
   const [deduplicationStatus, setDeduplicationStatus] = useState(null);
   const [deduplicationProgressOpen, setDeduplicationProgressOpen] = useState(false);
+  
+  // Starburst ingestion dialog state
+  const [starburstDialogOpen, setStarburstDialogOpen] = useState(false);
+  const [starburstAsset, setStarburstAsset] = useState(null);
+  const [starburstHost, setStarburstHost] = useState('');
+  const [starburstPort, setStarburstPort] = useState('443');
+  const [starburstUser, setStarburstUser] = useState('');
+  const [starburstPassword, setStarburstPassword] = useState('');
+  const [starburstHttpScheme, setStarburstHttpScheme] = useState('https');
+  const [starburstCatalog, setStarburstCatalog] = useState('');
+  const [starburstSchema, setStarburstSchema] = useState('');
+  const [starburstTableName, setStarburstTableName] = useState('');
+  const [starburstViewName, setStarburstViewName] = useState('');
+  const [starburstViewSql, setStarburstViewSql] = useState('');
+  const [starburstLoading, setStarburstLoading] = useState(false);
+  const [starburstError, setStarburstError] = useState('');
+  const [starburstSuccess, setStarburstSuccess] = useState('');
   
   // Default metadata field visibility (all visible by default)
   // Only includes fields that are actually displayed in the UI and controlled by visibility settings
@@ -623,6 +641,115 @@ const AssetsPage = () => {
         console.error('Error approving asset:', error);
       }
       alert(`Failed to approve asset: ${error.message}`);
+    }
+  };
+
+  const handleOpenStarburstDialog = (asset) => {
+    if (!asset) return;
+    setStarburstAsset(asset);
+    setStarburstCatalog(asset.catalog || '');
+    setStarburstSchema('');
+    setStarburstTableName(asset.name || '');
+    setStarburstViewName(`${asset.name || 'masked_view'}_masked`);
+    setStarburstHost('');
+    setStarburstPort('443');
+    setStarburstUser('');
+    setStarburstPassword('');
+    setStarburstHttpScheme('https');
+    setStarburstViewSql('');
+    setStarburstError('');
+    setStarburstSuccess('');
+    setStarburstDialogOpen(true);
+  };
+
+  const handleCloseStarburstDialog = () => {
+    if (starburstLoading) return;
+    setStarburstDialogOpen(false);
+  };
+
+  const handleStarburstPreview = async () => {
+    if (!starburstAsset) return;
+    setStarburstLoading(true);
+    setStarburstError('');
+    setStarburstSuccess('');
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const response = await fetch(`${API_BASE_URL}/api/assets/${starburstAsset.id}/starburst/ingest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          preview_only: true,
+          connection: {
+            host: starburstHost,
+            port: starburstPort ? Number(starburstPort) : 443,
+            user: starburstUser,
+            password: starburstPassword,
+            http_scheme: starburstHttpScheme,
+          },
+          catalog: starburstCatalog,
+          schema: starburstSchema,
+          table_name: starburstTableName,
+          view_name: starburstViewName,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to generate Starburst view SQL');
+      }
+
+      setStarburstViewSql(data.view_sql || '');
+      setStarburstSuccess('Generated Starburst masking view SQL. Review below before ingesting.');
+    } catch (error) {
+      console.error('Error generating Starburst view SQL:', error);
+      setStarburstError(error?.message || 'Failed to generate Starburst view SQL');
+    } finally {
+      setStarburstLoading(false);
+    }
+  };
+
+  const handleStarburstIngest = async () => {
+    if (!starburstAsset) return;
+    setStarburstLoading(true);
+    setStarburstError('');
+    setStarburstSuccess('');
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const response = await fetch(`${API_BASE_URL}/api/assets/${starburstAsset.id}/starburst/ingest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          preview_only: false,
+          connection: {
+            host: starburstHost,
+            port: starburstPort ? Number(starburstPort) : 443,
+            user: starburstUser,
+            password: starburstPassword,
+            http_scheme: starburstHttpScheme,
+          },
+          catalog: starburstCatalog,
+          schema: starburstSchema,
+          table_name: starburstTableName,
+          view_name: starburstViewName,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to ingest view into Starburst');
+      }
+
+      setStarburstViewSql(data.view_sql || '');
+      setStarburstSuccess('Successfully created masked view in Starburst Enterprise.');
+    } catch (error) {
+      console.error('Error ingesting view into Starburst:', error);
+      setStarburstError(error?.message || 'Failed to ingest view into Starburst');
+    } finally {
+      setStarburstLoading(false);
     }
   };
 
@@ -1963,6 +2090,172 @@ const AssetsPage = () => {
       </Dialog>
 
       <Dialog
+        open={starburstDialogOpen}
+        onClose={handleCloseStarburstDialog}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>Ingest Masked View to Starburst Enterprise</DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Configure your Starburst Enterprise connection and target view location. The generated view will apply masking based on this asset&apos;s PII configuration.
+            </Typography>
+
+            <Typography variant="subtitle2" sx={{ mt: 1 }}>Connection details</Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Host"
+                  fullWidth
+                  size="small"
+                  value={starburstHost}
+                  onChange={(e) => setStarburstHost(e.target.value)}
+                  placeholder="starburst.mycompany.com"
+                />
+              </Grid>
+              <Grid item xs={6} md={3}>
+                <TextField
+                  label="Port"
+                  fullWidth
+                  size="small"
+                  value={starburstPort}
+                  onChange={(e) => setStarburstPort(e.target.value)}
+                  placeholder="443"
+                />
+              </Grid>
+              <Grid item xs={6} md={3}>
+                <TextField
+                  label="HTTP Scheme"
+                  fullWidth
+                  size="small"
+                  value={starburstHttpScheme}
+                  onChange={(e) => setStarburstHttpScheme(e.target.value)}
+                  placeholder="https"
+                  helperText="e.g. https or http"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="User"
+                  fullWidth
+                  size="small"
+                  value={starburstUser}
+                  onChange={(e) => setStarburstUser(e.target.value)}
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Password"
+                  type="password"
+                  fullWidth
+                  size="small"
+                  value={starburstPassword}
+                  onChange={(e) => setStarburstPassword(e.target.value)}
+                />
+              </Grid>
+            </Grid>
+
+            <Typography variant="subtitle2" sx={{ mt: 2 }}>Target view location</Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  label="Catalog"
+                  fullWidth
+                  size="small"
+                  value={starburstCatalog}
+                  onChange={(e) => setStarburstCatalog(e.target.value)}
+                  placeholder="lz_lakehouse"
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  label="Schema"
+                  fullWidth
+                  size="small"
+                  value={starburstSchema}
+                  onChange={(e) => setStarburstSchema(e.target.value)}
+                  placeholder="en_visionplus"
+                />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  label="Base Table Name"
+                  fullWidth
+                  size="small"
+                  value={starburstTableName}
+                  onChange={(e) => setStarburstTableName(e.target.value)}
+                  placeholder={starburstAsset?.name || ''}
+                  helperText="Starburst table to mask (FROM clause)"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="View Name"
+                  fullWidth
+                  size="small"
+                  value={starburstViewName}
+                  onChange={(e) => setStarburstViewName(e.target.value)}
+                  placeholder={`${starburstAsset?.name || 'table'}_masked`}
+                  helperText="Masked view name to create"
+                />
+              </Grid>
+            </Grid>
+
+            {starburstError && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                {starburstError}
+              </Alert>
+            )}
+            {starburstSuccess && (
+              <Alert severity="success" sx={{ mt: 2 }}>
+                {starburstSuccess}
+              </Alert>
+            )}
+
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Generated masking view SQL
+              </Typography>
+              <TextField
+                value={starburstViewSql}
+                onChange={() => {}}
+                fullWidth
+                multiline
+                minRows={6}
+                maxRows={18}
+                size="small"
+                placeholder="Click Generate SQL to see the Starburst view definition"
+                InputProps={{
+                  readOnly: true,
+                  sx: {
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                  },
+                }}
+              />
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseStarburstDialog} disabled={starburstLoading}>
+            Close
+          </Button>
+          <Button onClick={handleStarburstPreview} disabled={starburstLoading}>
+            {starburstLoading ? 'Generating...' : 'Generate SQL'}
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<CloudUpload />}
+            onClick={handleStarburstIngest}
+            disabled={starburstLoading || !starburstViewSql}
+          >
+            {starburstLoading ? 'Ingesting...' : 'Ingest to Starburst'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
         open={hiddenDuplicatesOpen}
         onClose={() => setHiddenDuplicatesOpen(false)}
         fullWidth
@@ -2350,6 +2643,18 @@ const AssetsPage = () => {
                                 onClick={() => handleViewAsset(asset.id)}
                               >
                                 View
+                              </Button>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title="Ingest a masked analytical view for this asset into Starburst Enterprise">
+                            <span>
+                              <Button
+                                size="small"
+                                startIcon={<CloudUpload />}
+                                variant="outlined"
+                                onClick={() => handleOpenStarburstDialog(asset)}
+                              >
+                                Ingest
                               </Button>
                             </span>
                           </Tooltip>

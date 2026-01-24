@@ -19,7 +19,143 @@ from flask import current_app
 
 logger = logging.getLogger(__name__)
 
+# Optional Starburst / Trino client support
+try:
+    from trino.dbapi import connect as trino_connect
+    from trino.auth import BasicAuthentication
+
+    STARBURST_AVAILABLE = True
+except ImportError:
+    trino_connect = None
+    BasicAuthentication = None
+    STARBURST_AVAILABLE = False
+
+
 assets_bp = Blueprint('assets', __name__)
+
+
+def _quote_starburst_identifier(identifier: str) -> str:
+    """
+    Quote an identifier for Starburst/Trino using double quotes and escape inner quotes.
+    """
+    if identifier is None:
+        return '""'
+    value = str(identifier)
+    value = value.replace('"', '""')
+    return f'"{value}"'
+
+
+def generate_starburst_masked_view_sql(asset, columns, catalog: str, schema: str, table_name: str, view_name: str):
+    """
+    Generate a Starburst/Trino-compatible CREATE VIEW statement with masking applied.
+
+    - Uses \"catalog\".\"schema\".\"table\" naming.
+    - Applies '***MASKED***' for PII columns unless masking logic explicitly allows full visibility.
+    - Always adds SECURITY INVOKER as requested.
+    """
+    if not catalog or not schema:
+        raise ValueError("catalog and schema are required for Starburst view generation")
+
+    if not table_name:
+        table_name = asset.name
+    if not view_name:
+        view_name = f"{table_name}_masked"
+
+    q_catalog = _quote_starburst_identifier(catalog)
+    q_schema = _quote_starburst_identifier(schema)
+    q_table = _quote_starburst_identifier(table_name)
+    q_view = _quote_starburst_identifier(view_name)
+
+    full_table = f"{q_catalog}.{q_schema}.{q_table}"
+    full_view = f"{q_catalog}.{q_schema}.{q_view}"
+
+    select_lines = []
+    masking_summary = []
+
+    for col in columns:
+        col_name = col.get("name")
+        if not col_name:
+            continue
+
+        q_col = _quote_starburst_identifier(col_name)
+        pii_detected = bool(col.get("pii_detected"))
+        masking_logic = col.get("masking_logic_analytical")
+        masking_logic_str = str(masking_logic) if masking_logic not in (None, "") else ""
+        logic_norm = masking_logic_str.strip().lower()
+
+        # Decide effective expression for this column
+        if pii_detected:
+            if logic_norm in ("show_full", "none", "no_mask", "unmasked", "original"):
+                expr = q_col
+                effective_mode = "unmasked"
+            else:
+                # Default to full redaction for PII in Starburst view
+                expr = "'***MASKED***'"
+                effective_mode = "redacted"
+        else:
+            expr = q_col
+            effective_mode = "unmasked"
+
+        if expr == q_col:
+            select_lines.append(f"    {q_col}")
+        else:
+            select_lines.append(f"    {expr} AS {q_col}")
+
+        masking_summary.append(
+            {
+                "name": col_name,
+                "pii_detected": pii_detected,
+                "masking_logic_analytical": masking_logic_str,
+                "effective_mode": effective_mode,
+                "expression": expr,
+            }
+        )
+
+    if not select_lines:
+        raise ValueError("No columns available to generate Starburst view")
+
+    comma_newline = ",\n"
+    select_sql = comma_newline.join(select_lines)
+
+    view_sql = f"""CREATE OR REPLACE VIEW {full_view}
+SECURITY INVOKER
+AS
+SELECT
+{select_sql}
+FROM {full_table};"""
+
+    return view_sql, masking_summary
+
+
+def execute_starburst_view_sql(host: str, port: int, user: str, password: str, http_scheme: str, sql: str):
+    """
+    Execute a CREATE VIEW statement in Starburst/Trino using basic authentication.
+    Connection details are provided per request and are not stored.
+    """
+    if not STARBURST_AVAILABLE or trino_connect is None:
+        raise RuntimeError("Starburst/Trino client library (trino) is not installed on the server")
+
+    conn = None
+    try:
+        auth = None
+        if password:
+            auth = BasicAuthentication(user, password)
+
+        conn = trino_connect(
+            host=host,
+            port=port,
+            user=user,
+            http_scheme=http_scheme or "https",
+            auth=auth,
+        )
+        cur = conn.cursor()
+        cur.execute(sql)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 @assets_bp.route('/api/assets', methods=['GET'])
 @handle_error
@@ -941,7 +1077,118 @@ def publish_asset(asset_id):
         db.close()
 
 
+@assets_bp.route('/api/assets/<int:asset_id>/starburst/ingest', methods=['POST'])
+@handle_error
+def ingest_asset_to_starburst(asset_id):
+    """
+    Generate a Starburst masking view for the given asset and optionally execute it in Starburst Enterprise.
 
+    Expected request JSON body:
+    {
+      "connection": {
+        "host": "...",           # required for ingest
+        "port": 443,
+        "user": "starburst_user",
+        "password": "secret",
+        "http_scheme": "https"
+      },
+      "catalog": "lz_lakehouse",
+      "schema": "en_visionplus",
+      "table_name": "ath5_bkp_18112025",
+      "view_name": "ath5_bkp_18112025_masked",
+      "preview_only": true/false
+    }
+    """
+    db = SessionLocal()
+    try:
+        asset = db.query(Asset).filter(Asset.id == asset_id).first()
+        if not asset:
+            return jsonify({"error": "Asset not found"}), 404
+
+        payload = request.json or {}
+        preview_only = bool(payload.get("preview_only", False))
+
+        catalog = (payload.get("catalog") or "").strip()
+        schema = (payload.get("schema") or "").strip()
+        table_name = (payload.get("table_name") or "").strip() or asset.name
+        view_name = (payload.get("view_name") or "").strip() or f"{table_name}_masked"
+
+        if not catalog or not schema:
+            return jsonify({"error": "Both catalog and schema are required"}), 400
+
+        columns = normalize_columns(asset.columns or [])
+
+        try:
+            view_sql, masking_summary = generate_starburst_masked_view_sql(
+                asset, columns, catalog=catalog, schema=schema, table_name=table_name, view_name=view_name
+            )
+        except Exception as e:
+            logger.error(
+                "FN:ingest_asset_to_starburst_generate_sql asset_id:%s error:%s",
+                asset_id,
+                str(e),
+                exc_info=True,
+            )
+            return jsonify({"error": f"Failed to generate Starburst view SQL: {str(e)}"}), 400
+
+        response_data = {
+            "success": True,
+            "preview_only": preview_only,
+            "catalog": catalog,
+            "schema": schema,
+            "table_name": table_name,
+            "view_name": view_name,
+            "view_sql": view_sql,
+            "masking_summary": masking_summary,
+        }
+
+        if preview_only:
+            # Only return the generated SQL and masking summary, do not connect to Starburst
+            return jsonify(response_data), 200
+
+        # Ingest into Starburst Enterprise (execute CREATE OR REPLACE VIEW)
+        if not STARBURST_AVAILABLE:
+            return jsonify({"error": "Starburst/Trino client library (trino) is not installed on the server."}), 503
+
+        conn_cfg = payload.get("connection") or {}
+        host = (conn_cfg.get("host") or "").strip()
+        if not host:
+            return jsonify({"error": "Starburst host is required to ingest the view"}), 400
+
+        try:
+            port_raw = conn_cfg.get("port")
+            port = int(port_raw) if port_raw not in (None, "") else 443
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid Starburst port"}), 400
+
+        user = (conn_cfg.get("user") or "torro_user").strip() or "torro_user"
+        password = conn_cfg.get("password") or ""
+        http_scheme = (conn_cfg.get("http_scheme") or "https").strip() or "https"
+
+        try:
+            execute_starburst_view_sql(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                http_scheme=http_scheme,
+                sql=view_sql,
+            )
+        except Exception as e:
+            logger.error(
+                "FN:ingest_asset_to_starburst_execute asset_id:%s host:%s port:%s error:%s",
+                asset_id,
+                host,
+                port,
+                str(e),
+                exc_info=True,
+            )
+            return jsonify({"error": f"Failed to create view in Starburst: {str(e)}"}), 400
+
+        response_data["ingested"] = True
+        return jsonify(response_data), 200
+    finally:
+        db.close()
 
 
 # OLD LINEAGE ENDPOINTS REMOVED - Use new lineage system at /api/lineage/* instead
