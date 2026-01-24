@@ -139,8 +139,10 @@ const AssetsPage = () => {
   const [starburstCatalog, setStarburstCatalog] = useState('');
   const [starburstSchema, setStarburstSchema] = useState('');
   const [starburstTableName, setStarburstTableName] = useState('');
-  const [starburstViewName, setStarburstViewName] = useState('');
-  const [starburstViewSql, setStarburstViewSql] = useState('');
+  const [starburstViewNameAnalytical, setStarburstViewNameAnalytical] = useState('');
+  const [starburstViewNameOperational, setStarburstViewNameOperational] = useState('');
+  const [starburstViewSqlAnalytical, setStarburstViewSqlAnalytical] = useState('');
+  const [starburstViewSqlOperational, setStarburstViewSqlOperational] = useState('');
   const [starburstLoading, setStarburstLoading] = useState(false);
   const [starburstError, setStarburstError] = useState('');
   const [starburstSuccess, setStarburstSuccess] = useState('');
@@ -652,14 +654,17 @@ const AssetsPage = () => {
     setStarburstCatalog('');
     setStarburstSchema('');
     setStarburstTableName('');
-    setStarburstViewName(`${asset.name || 'table'}_masked_analytical`);
+    const baseName = asset.name || 'table';
+    setStarburstViewNameAnalytical(`${baseName}_masked_analytical`);
+    setStarburstViewNameOperational(`${baseName}_masked_operational`);
     setStarburstHost('');
     setStarburstPort('443');
     setStarburstUser('');
     setStarburstPassword('');
     setStarburstHttpScheme('https');
     setStarburstVerifySsl(true);
-    setStarburstViewSql('');
+    setStarburstViewSqlAnalytical('');
+    setStarburstViewSqlOperational('');
     setStarburstError('');
     setStarburstSuccess('');
     setStarburstDialogOpen(true);
@@ -696,7 +701,8 @@ const AssetsPage = () => {
           catalog: starburstCatalog,
           schema: starburstSchema,
           table_name: starburstTableName,
-          view_name: starburstViewName,
+          view_name_analytical: starburstViewNameAnalytical,
+          view_name_operational: starburstViewNameOperational,
         }),
       });
 
@@ -705,7 +711,8 @@ const AssetsPage = () => {
         throw new Error(data.error || 'Failed to generate Starburst view SQL');
       }
 
-      setStarburstViewSql(data.view_sql || '');
+      setStarburstViewSqlAnalytical(data.view_sql_analytical || '');
+      setStarburstViewSqlOperational(data.view_sql_operational || '');
       setStarburstSuccess('Authenticated to Starburst and generated analytical + operational masking view SQL. Review below before ingesting.');
     } catch (error) {
       console.error('Error generating Starburst view SQL:', error);
@@ -740,7 +747,8 @@ const AssetsPage = () => {
           catalog: starburstCatalog,
           schema: starburstSchema,
           table_name: starburstTableName,
-          view_name: starburstViewName,
+          view_name_analytical: starburstViewNameAnalytical,
+          view_name_operational: starburstViewNameOperational,
         }),
       });
 
@@ -749,7 +757,8 @@ const AssetsPage = () => {
         throw new Error(data.error || 'Failed to ingest view into Starburst');
       }
 
-      setStarburstViewSql(data.view_sql || '');
+      setStarburstViewSqlAnalytical(data.view_sql_analytical || '');
+      setStarburstViewSqlOperational(data.view_sql_operational || '');
       setStarburstSuccess('Successfully created masked view in Starburst Enterprise.');
     } catch (error) {
       console.error('Error ingesting view into Starburst:', error);
@@ -2210,13 +2219,24 @@ const AssetsPage = () => {
               </Grid>
               <Grid item xs={12} md={6}>
                 <TextField
-                  label="View Name"
+                  label="View Name (Analytical)"
                   fullWidth
                   size="small"
-                  value={starburstViewName}
-                  onChange={(e) => setStarburstViewName(e.target.value)}
+                  value={starburstViewNameAnalytical}
+                  onChange={(e) => setStarburstViewNameAnalytical(e.target.value)}
                   placeholder={`${starburstAsset?.name || 'table'}_masked_analytical`}
-                  helperText="Analytical masked view name (operational view will use the same base name with _operational)"
+                  helperText="Analytical masked view name"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="View Name (Operational)"
+                  fullWidth
+                  size="small"
+                  value={starburstViewNameOperational}
+                  onChange={(e) => setStarburstViewNameOperational(e.target.value)}
+                  placeholder={`${starburstAsset?.name || 'table'}_masked_operational`}
+                  helperText="Operational masked view name"
                 />
               </Grid>
             </Grid>
@@ -2234,17 +2254,37 @@ const AssetsPage = () => {
 
             <Box sx={{ mt: 2 }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Generated masking view SQL
+                Generated masking view SQL (Analytical)
               </Typography>
               <TextField
-                value={starburstViewSql}
+                value={starburstViewSqlAnalytical}
                 onChange={() => {}}
                 fullWidth
                 multiline
-                minRows={6}
-                maxRows={18}
+                minRows={4}
+                maxRows={12}
                 size="small"
-                placeholder="Click Generate SQL to see the Starburst view definition"
+                placeholder="Click Generate SQL to see the analytical view definition"
+                InputProps={{
+                  readOnly: true,
+                  sx: {
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                  },
+                }}
+              />
+              <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+                Generated masking view SQL (Operational)
+              </Typography>
+              <TextField
+                value={starburstViewSqlOperational}
+                onChange={() => {}}
+                fullWidth
+                multiline
+                minRows={4}
+                maxRows={12}
+                size="small"
+                placeholder="Click Generate SQL to see the operational view definition"
                 InputProps={{
                   readOnly: true,
                   sx: {
@@ -2268,7 +2308,7 @@ const AssetsPage = () => {
             color="primary"
             startIcon={<CloudUpload />}
             onClick={handleStarburstIngest}
-            disabled={starburstLoading || !starburstViewSql}
+            disabled={starburstLoading || !starburstViewSqlAnalytical || !starburstViewSqlOperational}
           >
             {starburstLoading ? 'Ingesting...' : 'Ingest to Starburst'}
           </Button>

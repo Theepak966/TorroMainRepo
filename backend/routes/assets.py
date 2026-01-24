@@ -1170,6 +1170,10 @@ def ingest_asset_to_starburst(asset_id):
         schema = (payload.get("schema") or "").strip()
         table_name = (payload.get("table_name") or "").strip() or asset.name
 
+        # Optional explicit names for analytical and operational views.
+        view_name_analytical = (payload.get("view_name_analytical") or "").strip()
+        view_name_operational = (payload.get("view_name_operational") or "").strip()
+        # Backwards compatibility with older single view_name field.
         raw_view_name = (payload.get("view_name") or "").strip()
 
         if not catalog or not schema:
@@ -1226,7 +1230,24 @@ def ingest_asset_to_starburst(asset_id):
 
         try:
             # Derive analytical and operational view names from the base table / user input.
-            if raw_view_name:
+            if view_name_analytical and view_name_operational:
+                analytical_view_name = view_name_analytical
+                operational_view_name = view_name_operational
+            elif view_name_analytical:
+                analytical_view_name = view_name_analytical
+                suffix = "_analytical"
+                if view_name_analytical.endswith(suffix):
+                    operational_view_name = view_name_analytical[: -len(suffix)] + "_operational"
+                else:
+                    operational_view_name = f"{view_name_analytical}_operational"
+            elif view_name_operational:
+                operational_view_name = view_name_operational
+                suffix = "_operational"
+                if view_name_operational.endswith(suffix):
+                    analytical_view_name = view_name_operational[: -len(suffix)] + "_analytical"
+                else:
+                    analytical_view_name = f"{view_name_operational}_analytical"
+            elif raw_view_name:
                 analytical_view_name = raw_view_name
                 suffix = "_analytical"
                 if raw_view_name.endswith(suffix):
