@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS assets (
     operational_metadata JSON,
     business_metadata JSON,
     columns JSON,
+    custom_columns JSON,
     INDEX idx_catalog (catalog),
     INDEX idx_connector_id (connector_id),
     INDEX idx_type (type)
