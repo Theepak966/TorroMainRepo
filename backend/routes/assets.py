@@ -156,6 +156,7 @@ def execute_starburst_view_sql(
     catalog: str = None,
     schema: str = None,
     verify: bool = True,
+    roles: dict = None,
 ):
     """
     Execute a CREATE VIEW statement in Starburst/Trino using basic authentication.
@@ -179,6 +180,7 @@ def execute_starburst_view_sql(
             catalog=catalog,
             schema=schema,
             verify=verify,
+            roles=roles,
         )
         cur = conn.cursor()
         cur.execute(sql)
@@ -199,6 +201,7 @@ def test_starburst_connection(
     catalog: str = None,
     schema: str = None,
     verify: bool = True,
+    roles: dict = None,
 ):
     """
     Authenticate to Starburst/Trino and run a cheap query to validate credentials.
@@ -213,6 +216,7 @@ def test_starburst_connection(
         catalog=catalog,
         schema=schema,
         verify=verify,
+        roles=roles,
     )
 
 @assets_bp.route('/api/assets', methods=['GET'])
@@ -1198,6 +1202,13 @@ def ingest_asset_to_starburst(asset_id):
             except Exception:
                 pass
         verify_ssl = bool(verify_ssl)
+        
+        # Optional: allow caller to request a Starburst/Trino role (common: system=sysadmin)
+        roles = None
+        role_name = (conn_cfg.get("role") or "").strip()
+        role_catalog = (conn_cfg.get("role_catalog") or "system").strip() or "system"
+        if role_name:
+            roles = {role_catalog: role_name}
 
         # If requested, authenticate to Starburst first (so UI can show auth errors before SQL preview/ingest)
         validate_connection = bool(payload.get("validate_connection", False))
@@ -1216,6 +1227,7 @@ def ingest_asset_to_starburst(asset_id):
                     catalog=catalog,
                     schema=schema,
                     verify=verify_ssl,
+                    roles=roles,
                 )
             except Exception as e:
                 logger.error(
@@ -1326,6 +1338,7 @@ def ingest_asset_to_starburst(asset_id):
                 catalog=catalog,
                 schema=schema,
                 verify=verify_ssl,
+                roles=roles,
             )
             # Operational view
             execute_starburst_view_sql(
@@ -1338,6 +1351,7 @@ def ingest_asset_to_starburst(asset_id):
                 catalog=catalog,
                 schema=schema,
                 verify=verify_ssl,
+                roles=roles,
             )
         except Exception as e:
             logger.error(

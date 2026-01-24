@@ -136,6 +136,7 @@ const AssetsPage = () => {
   const [starburstPassword, setStarburstPassword] = useState('');
   const [starburstHttpScheme, setStarburstHttpScheme] = useState('https');
   const [starburstVerifySsl, setStarburstVerifySsl] = useState(true);
+  const [starburstRole, setStarburstRole] = useState('sysadmin');
   const [starburstCatalog, setStarburstCatalog] = useState('');
   const [starburstSchema, setStarburstSchema] = useState('');
   const [starburstTableName, setStarburstTableName] = useState('');
@@ -663,6 +664,7 @@ const AssetsPage = () => {
     setStarburstPassword('');
     setStarburstHttpScheme('https');
     setStarburstVerifySsl(true);
+    setStarburstRole('sysadmin');
     setStarburstViewSqlAnalytical('');
     setStarburstViewSqlOperational('');
     setStarburstError('');
@@ -697,6 +699,8 @@ const AssetsPage = () => {
             password: starburstPassword,
             http_scheme: starburstHttpScheme,
             verify_ssl: starburstVerifySsl,
+            role: starburstRole,
+            role_catalog: 'system',
           },
           catalog: starburstCatalog,
           schema: starburstSchema,
@@ -743,6 +747,8 @@ const AssetsPage = () => {
             password: starburstPassword,
             http_scheme: starburstHttpScheme,
             verify_ssl: starburstVerifySsl,
+            role: starburstRole,
+            role_catalog: 'system',
           },
           catalog: starburstCatalog,
           schema: starburstSchema,
@@ -2181,6 +2187,17 @@ const AssetsPage = () => {
                     label="Verify SSL certificate"
                   />
                 </Tooltip>
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="Role"
+                  fullWidth
+                  size="small"
+                  value={starburstRole}
+                  onChange={(e) => setStarburstRole(e.target.value)}
+                  placeholder="sysadmin"
+                  helperText="Optional Starburst role to assume (sent as system role)"
+                />
               </Grid>
             </Grid>
 
