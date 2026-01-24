@@ -103,6 +103,13 @@ const AssetsPage = () => {
   const [exportAnchorEl, setExportAnchorEl] = useState(null);
   const [selectedColumns, setSelectedColumns] = useState([]);
   const [showColumnCheckboxes, setShowColumnCheckboxes] = useState(false);
+  
+  // Custom columns state
+  const [addColumnDialogOpen, setAddColumnDialogOpen] = useState(false);
+  const [newColumnLabel, setNewColumnLabel] = useState('');
+  const [customColumns, setCustomColumns] = useState({}); // { columnId: { label: string, values: { columnName: value } } }
+  const [editingCustomValue, setEditingCustomValue] = useState(null); // { columnId, columnName }
+  const [customValueInput, setCustomValueInput] = useState('');
 
   // Hidden duplicates review
   const [hiddenDuplicatesOpen, setHiddenDuplicatesOpen] = useState(false);
@@ -395,6 +402,13 @@ const AssetsPage = () => {
         // Merge with existing to preserve unsaved changes for other assets
         return { ...prev, ...initialMaskingLogic };
       });
+      
+      // Load custom columns from asset
+      if (selectedAsset.custom_columns) {
+        setCustomColumns(selectedAsset.custom_columns);
+      } else {
+        setCustomColumns({});
+      }
     }
   }, [selectedAsset]);
 
@@ -1175,6 +1189,48 @@ const AssetsPage = () => {
     }
   };
 
+  // Handler to add custom column
+  const handleAddCustomColumn = async () => {
+    if (!selectedAsset || !newColumnLabel.trim()) return;
+    
+    const columnId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const updatedCustomColumns = {
+      ...customColumns,
+      [columnId]: {
+        label: newColumnLabel.trim(),
+        values: {}
+      }
+    };
+    
+    setCustomColumns(updatedCustomColumns);
+    
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      const response = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_columns: updatedCustomColumns })
+      });
+      
+      if (response.ok) {
+        // Refresh asset
+        const assetResponse = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`);
+        if (assetResponse.ok) {
+          const updatedAsset = await assetResponse.json();
+          setSelectedAsset(updatedAsset);
+        }
+        setAddColumnDialogOpen(false);
+        setNewColumnLabel('');
+      } else {
+        throw new Error('Failed to add custom column');
+      }
+    } catch (err) {
+      console.error('Failed to add custom column:', err);
+      alert('Failed to add custom column: ' + err.message);
+      // Revert on error
+      setCustomColumns(customColumns);
+    }
+  };
 
   // Handler to save masking logic changes directly from table
   const handleSaveMaskingLogic = async (columnName) => {
@@ -3515,6 +3571,14 @@ const AssetsPage = () => {
                       )}
                       <Button
                         variant="outlined"
+                        color="primary"
+                        startIcon={<Add />}
+                        onClick={() => setAddColumnDialogOpen(true)}
+                      >
+                        Add Column
+                      </Button>
+                      <Button
+                        variant="outlined"
                         startIcon={<FileDownload />}
                         endIcon={<ArrowDropDown />}
                         onClick={(e) => setExportAnchorEl(e.currentTarget)}
@@ -3603,6 +3667,48 @@ const AssetsPage = () => {
                                   <TableCell>Nullable</TableCell>
                                   <TableCell>Description</TableCell>
                                   <TableCell>PII Status</TableCell>
+                                  {/* Custom columns headers */}
+                                  {Object.entries(customColumns).map(([columnId, customCol]) => (
+                                    <TableCell key={columnId}>
+                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        {customCol.label}
+                                        <IconButton
+                                          size="small"
+                                          onClick={async () => {
+                                            if (confirm(`Delete custom column "${customCol.label}"?`)) {
+                                              const updatedCustomColumns = { ...customColumns };
+                                              delete updatedCustomColumns[columnId];
+                                              setCustomColumns(updatedCustomColumns);
+                                              
+                                              // Save to backend
+                                              if (selectedAsset) {
+                                                try {
+                                                  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                                  await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
+                                                    method: 'PUT',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ custom_columns: updatedCustomColumns })
+                                                  });
+                                                  // Refresh asset
+                                                  const assetResponse = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`);
+                                                  if (assetResponse.ok) {
+                                                    const updatedAsset = await assetResponse.json();
+                                                    setSelectedAsset(updatedAsset);
+                                                  }
+                                                } catch (err) {
+                                                  console.error('Failed to delete custom column:', err);
+                                                  alert('Failed to delete custom column');
+                                                }
+                                              }
+                                            }
+                                          }}
+                                          sx={{ ml: 0.5 }}
+                                        >
+                                          <Close fontSize="small" />
+                                        </IconButton>
+                                      </Box>
+                                    </TableCell>
+                                  ))}
                                   {hasPiiOrChanging && (
                                     <>
                                       <TableCell>Masking logic (Analytical User)</TableCell>
@@ -3770,6 +3876,87 @@ const AssetsPage = () => {
                                           />
                                         )}
                                       </TableCell>
+                                      {/* Custom columns cells */}
+                                      {Object.entries(customColumns).map(([columnId, customCol]) => {
+                                        const isEditing = editingCustomValue?.columnId === columnId && editingCustomValue?.columnName === column.name;
+                                        const currentValue = customCol.values?.[column.name] || '';
+                                        
+                                        return (
+                                          <TableCell key={columnId}>
+                                            {isEditing ? (
+                                              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                                                <TextField
+                                                  size="small"
+                                                  value={customValueInput}
+                                                  onChange={(e) => setCustomValueInput(e.target.value)}
+                                                  onBlur={async () => {
+                                                    // Save value
+                                                    const updatedCustomColumns = {
+                                                      ...customColumns,
+                                                      [columnId]: {
+                                                        ...customCol,
+                                                        values: {
+                                                          ...(customCol.values || {}),
+                                                          [column.name]: customValueInput
+                                                        }
+                                                      }
+                                                    };
+                                                    setCustomColumns(updatedCustomColumns);
+                                                    setEditingCustomValue(null);
+                                                    
+                                                    // Save to backend
+                                                    if (selectedAsset) {
+                                                      try {
+                                                        const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                                        await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`, {
+                                                          method: 'PUT',
+                                                          headers: { 'Content-Type': 'application/json' },
+                                                          body: JSON.stringify({ custom_columns: updatedCustomColumns })
+                                                        });
+                                                        // Refresh asset
+                                                        const assetResponse = await fetch(`${API_BASE_URL}/api/assets/${selectedAsset.id}`);
+                                                        if (assetResponse.ok) {
+                                                          const updatedAsset = await assetResponse.json();
+                                                          setSelectedAsset(updatedAsset);
+                                                        }
+                                                      } catch (err) {
+                                                        console.error('Failed to save custom column value:', err);
+                                                        alert('Failed to save value');
+                                                      }
+                                                    }
+                                                  }}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                      e.target.blur();
+                                                    } else if (e.key === 'Escape') {
+                                                      setEditingCustomValue(null);
+                                                      setCustomValueInput('');
+                                                    }
+                                                  }}
+                                                  autoFocus
+                                                  sx={{ minWidth: 150 }}
+                                                />
+                                              </Box>
+                                            ) : (
+                                              <Typography
+                                                variant="body2"
+                                                onClick={() => {
+                                                  setEditingCustomValue({ columnId, columnName: column.name });
+                                                  setCustomValueInput(currentValue);
+                                                }}
+                                                sx={{
+                                                  cursor: 'pointer',
+                                                  color: currentValue ? 'text.primary' : 'text.secondary',
+                                                  '&:hover': { textDecoration: 'underline' },
+                                                  minHeight: '20px'
+                                                }}
+                                              >
+                                                {currentValue || 'Click to add'}
+                                              </Typography>
+                                            )}
+                                          </TableCell>
+                                        );
+                                      })}
                                       {hasPiiOrChanging && (() => {
                                         if (!selectedAsset) return null;
                                         
@@ -4156,6 +4343,49 @@ const AssetsPage = () => {
             startIcon={savingPii ? <CircularProgress size={20} /> : null}
           >
             {savingPii ? 'Saving...' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add Custom Column Dialog */}
+      <Dialog open={addColumnDialogOpen} onClose={() => {
+        setAddColumnDialogOpen(false);
+        setNewColumnLabel('');
+      }} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Custom Column</DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 2 }}>
+            <TextField
+              fullWidth
+              label="Column Label"
+              value={newColumnLabel}
+              onChange={(e) => setNewColumnLabel(e.target.value)}
+              placeholder="Enter column label (e.g., Notes, Tags, etc.)"
+              variant="outlined"
+              autoFocus
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && newColumnLabel.trim()) {
+                  e.preventDefault();
+                  handleAddCustomColumn();
+                }
+              }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => {
+            setAddColumnDialogOpen(false);
+            setNewColumnLabel('');
+          }}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleAddCustomColumn}
+            variant="contained" 
+            color="primary"
+            disabled={!newColumnLabel.trim()}
+          >
+            Add Column
           </Button>
         </DialogActions>
       </Dialog>
