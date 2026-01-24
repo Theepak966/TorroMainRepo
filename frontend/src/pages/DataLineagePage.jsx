@@ -1762,25 +1762,33 @@ const DataLineagePage = () => {
           {/* Lineage extraction runs silently in background - no UI messages */}
         </Box>
         <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button
-            variant="outlined"
-            startIcon={<Add />}
-            onClick={() => setManualLineageOpen(true)}
-            sx={{ height: 40 }}
-          >
-            Manual Lineage
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<Refresh />}
-            onClick={() => {
-              fetchLineage();
-            }}
-            disabled={loading}
-            sx={{ height: 40 }}
-          >
-            Refresh
-          </Button>
+          <Tooltip title="Manually create lineage relationships between assets">
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={<Add />}
+                onClick={() => setManualLineageOpen(true)}
+                sx={{ height: 40 }}
+              >
+                Manual Lineage
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Refresh the lineage graph to get the latest data relationships">
+            <span>
+              <Button
+                variant="contained"
+                startIcon={<Refresh />}
+                onClick={() => {
+                  fetchLineage();
+                }}
+                disabled={loading}
+                sx={{ height: 40 }}
+              >
+                Refresh
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
       </Box>
 
@@ -1900,55 +1908,67 @@ const DataLineagePage = () => {
               </FormControl>
             </Grid>
             <Grid item xs={12} md={2}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<FilterList />}
-                onClick={() => {
-                  setSearchTerm('');
-                  setFilterType('all');
-                  setFilterSource('all');
-                  handleAssetSelection(null);
-                }}
-              >
-                Clear All
-              </Button>
+              <Tooltip title="Clear all filters and search terms">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    startIcon={<FilterList />}
+                    onClick={() => {
+                      setSearchTerm('');
+                      setFilterType('all');
+                      setFilterSource('all');
+                      handleAssetSelection(null);
+                    }}
+                  >
+                    Clear All
+                  </Button>
+                </span>
+              </Tooltip>
             </Grid>
             {selectedAssetForLineage && (
               <>
                 <Grid item xs={12} md={2}>
-                  <Button
-                    fullWidth
-                    variant={lineageViewMode === 'hierarchical' ? 'contained' : 'outlined'}
-                    color={lineageViewMode === 'hierarchical' ? 'primary' : 'default'}
-                    onClick={async () => {
-                      setLineageViewMode('hierarchical');
-                      // Reload lineage when switching modes
-                      if (selectedAssetForLineage) {
-                        await handleAssetSelection(selectedAssetForLineage);
-                      }
-                    }}
-                    size="small"
-                  >
-                    Hierarchical
-                  </Button>
+                  <Tooltip title="View lineage in hierarchical folder structure (container → folders → assets)">
+                    <span>
+                      <Button
+                        fullWidth
+                        variant={lineageViewMode === 'hierarchical' ? 'contained' : 'outlined'}
+                        color={lineageViewMode === 'hierarchical' ? 'primary' : 'default'}
+                        onClick={async () => {
+                          setLineageViewMode('hierarchical');
+                          // Reload lineage when switching modes
+                          if (selectedAssetForLineage) {
+                            await handleAssetSelection(selectedAssetForLineage);
+                          }
+                        }}
+                        size="small"
+                      >
+                        Hierarchical
+                      </Button>
+                    </span>
+                  </Tooltip>
                 </Grid>
                 <Grid item xs={12} md={2}>
-                  <Button
-                    fullWidth
-                    variant={lineageViewMode === 'actual' ? 'contained' : 'outlined'}
-                    color={lineageViewMode === 'actual' ? 'primary' : 'default'}
-                    onClick={async () => {
-                      setLineageViewMode('actual');
-                      // Reload lineage when switching modes
-                      if (selectedAssetForLineage) {
-                        await handleAssetSelection(selectedAssetForLineage);
-                      }
-                    }}
-                    size="small"
-                  >
-                    Dependency Lineage
-                  </Button>
+                  <Tooltip title="View actual data dependency lineage (source → transform → target relationships)">
+                    <span>
+                      <Button
+                        fullWidth
+                        variant={lineageViewMode === 'actual' ? 'contained' : 'outlined'}
+                        color={lineageViewMode === 'actual' ? 'primary' : 'default'}
+                        onClick={async () => {
+                          setLineageViewMode('actual');
+                          // Reload lineage when switching modes
+                          if (selectedAssetForLineage) {
+                            await handleAssetSelection(selectedAssetForLineage);
+                          }
+                        }}
+                        size="small"
+                      >
+                        Dependency Lineage
+                      </Button>
+                    </span>
+                  </Tooltip>
                 </Grid>
               </>
             )}
@@ -2153,20 +2173,24 @@ const DataLineagePage = () => {
             <DataObject sx={{ fontSize: 28, color: '#666' }} />
             Asset Details
           </Typography>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => {
-              setSelectedAssetDetails(null);
-              setSelectedAssetForLineage(null);
-              setNodes([]);
-              setEdges([]);
-              setActiveDetailTab('basic');
-            }}
-            startIcon={<Close />}
-          >
-            Clear Selection
-          </Button>
+          <Tooltip title="Clear the selected asset and close the asset details panel">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  setSelectedAssetDetails(null);
+                  setSelectedAssetForLineage(null);
+                  setNodes([]);
+                  setEdges([]);
+                  setActiveDetailTab('basic');
+                }}
+                startIcon={<Close />}
+              >
+                Clear Selection
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
       )}
 
@@ -2247,15 +2271,19 @@ const DataLineagePage = () => {
                 />
               )}
             </Tabs>
-            <Button
-              variant="outlined"
-              startIcon={<Settings />}
-              onClick={() => setMetadataSettingsOpen(true)}
+            <Tooltip title="Configure which fields are visible in the asset details">
+              <span>
+                <Button
+                  variant="outlined"
+                  startIcon={<Settings />}
+                  onClick={() => setMetadataSettingsOpen(true)}
               sx={{ textTransform: 'none', ml: 2 }}
               size="small"
             >
               Settings
             </Button>
+              </span>
+            </Tooltip>
           </Box>
           
           <CardContent sx={{ p: 4, minHeight: '350px', overflow: 'auto' }}>

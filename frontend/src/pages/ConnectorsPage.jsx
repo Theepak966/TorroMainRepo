@@ -1515,29 +1515,37 @@ const ConnectorsPage = () => {
                   {}
                   {testResult && (
                     <Box sx={{ mt: 3, display: 'flex', justifyContent: 'center' }}>
-                      <Button
-                        variant="outlined"
-                        startIcon={<Replay />}
-                        onClick={handleTestConnection}
-                        disabled={testing}
-                        sx={{ minWidth: '150px' }}
-                      >
-                        {testing ? 'Testing...' : 'Retry Test'}
-                      </Button>
+                      <Tooltip title="Retry testing the connection with the current configuration">
+                        <span>
+                          <Button
+                            variant="outlined"
+                            startIcon={<Replay />}
+                            onClick={handleTestConnection}
+                            disabled={testing}
+                            sx={{ minWidth: '150px' }}
+                          >
+                            {testing ? 'Testing...' : 'Retry Test'}
+                          </Button>
+                        </span>
+                      </Tooltip>
                     </Box>
                   )}
                 </Box>
               ) : (
-                <Button
-                  variant="contained"
-                  onClick={handleTestConnection}
-                  disabled={
-                    !connectionType || 
-                    !config.name
-                  }
-                >
-                  Test Connection
-                </Button>
+                <Tooltip title="Test the connection with the provided credentials before saving">
+                  <span>
+                    <Button
+                      variant="contained"
+                      onClick={handleTestConnection}
+                      disabled={
+                        !connectionType || 
+                        !config.name
+                      }
+                    >
+                      Test Connection
+                    </Button>
+                  </span>
+                </Tooltip>
               )}
             </Box>
           </Box>
@@ -1582,23 +1590,31 @@ const ConnectorsPage = () => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button
-            variant="outlined"
-            startIcon={<Refresh />}
-            onClick={() => {
-              fetchMyConnections();
-            }}
-            disabled={loading}
-          >
-            Refresh
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<Add />}
-            onClick={() => setDialogOpen(true)}
-          >
-            New Connector
-          </Button>
+          <Tooltip title="Refresh the connections list to get the latest data">
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={<Refresh />}
+                onClick={() => {
+                  fetchMyConnections();
+                }}
+                disabled={loading}
+              >
+                Refresh
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Create a new data source connection">
+            <span>
+              <Button
+                variant="contained"
+                startIcon={<Add />}
+                onClick={() => setDialogOpen(true)}
+              >
+                New Connector
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
       </Box>
 
@@ -1632,19 +1648,21 @@ const ConnectorsPage = () => {
                               sx={{ mt: 0.5 }}
                             />
                           </Box>
-                          <IconButton
-                            size="small"
-                            onClick={() => handleDeleteClick(connection)}
-                            sx={{ 
-                              color: 'error.main',
-                              '&:hover': {
-                                backgroundColor: 'error.light',
-                                color: 'error.dark'
-                              }
-                            }}
-                          >
-                            <Delete fontSize="small" />
-                          </IconButton>
+                          <Tooltip title={`Delete connection "${connection.name}"`}>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleDeleteClick(connection)}
+                              sx={{ 
+                                color: 'error.main',
+                                '&:hover': {
+                                  backgroundColor: 'error.light',
+                                  color: 'error.dark'
+                                }
+                              }}
+                            >
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
                         </Box>
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                           Type: {connection.type}
@@ -1735,13 +1753,15 @@ const ConnectorsPage = () => {
                     {connector.description}
                   </Typography>
                   
-                  <Button
-                    variant="contained"
-                    fullWidth
-                    onClick={() => handleConnectClick(connector)}
-                    sx={{
-                      bgcolor: connector.color,
-                      '&:hover': {
+                  <Tooltip title={`Connect to ${connector.name} data source`}>
+                    <span>
+                      <Button
+                        variant="contained"
+                        fullWidth
+                        onClick={() => handleConnectClick(connector)}
+                        sx={{
+                          bgcolor: connector.color,
+                          '&:hover': {
                         bgcolor: connector.color,
                         opacity: 0.9,
                       }
@@ -1749,6 +1769,8 @@ const ConnectorsPage = () => {
                   >
                     Connect
                   </Button>
+                    </span>
+                  </Tooltip>
                 </Card>
               </Grid>
             ))}
@@ -1862,9 +1884,11 @@ const ConnectorsPage = () => {
             <Typography variant="h5" sx={{ fontWeight: 600 }}>
               Connect to {selectedConnector?.name}
             </Typography>
-            <IconButton onClick={handleWizardClose}>
-              <Close />
-            </IconButton>
+            <Tooltip title="Close the connection wizard">
+              <IconButton onClick={handleWizardClose}>
+                <Close />
+              </IconButton>
+            </Tooltip>
           </Box>
           
           <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
@@ -1880,31 +1904,45 @@ const ConnectorsPage = () => {
           </Box>
           
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Button
-              disabled={activeStep === 0}
-              onClick={handleBack}
-              startIcon={<ArrowBack />}
-            >
-              Back
-            </Button>
-            <Box>
-              <Button onClick={handleWizardClose} sx={{ mr: 1 }}>
-                Cancel
-              </Button>
-              {activeStep === wizardSteps.length - 1 ? (
-                <Button variant="contained" onClick={handleFinish}>
-                  Complete
-                </Button>
-              ) : (
+            <Tooltip title="Go back to the previous step">
+              <span>
                 <Button
-                  variant="contained"
-                  onClick={handleNext}
-                  endIcon={<ArrowForward />}
-                  disabled={
-                    (activeStep === 0 && !connectionType) ||
-                    (activeStep === 1 && (
-                      !config.name || 
-                      (connectionType === 'Connection String' && selectedConnector?.id === 'azure_blob' && !config.connection_string) ||
+                  disabled={activeStep === 0}
+                  onClick={handleBack}
+                  startIcon={<ArrowBack />}
+                >
+                  Back
+                </Button>
+              </span>
+            </Tooltip>
+            <Box>
+              <Tooltip title="Cancel and close the connection wizard">
+                <span>
+                  <Button onClick={handleWizardClose} sx={{ mr: 1 }}>
+                    Cancel
+                  </Button>
+                </span>
+              </Tooltip>
+              {activeStep === wizardSteps.length - 1 ? (
+                <Tooltip title="Complete the connection setup and save">
+                  <span>
+                    <Button variant="contained" onClick={handleFinish}>
+                      Complete
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : (
+                <Tooltip title="Continue to the next step">
+                  <span>
+                    <Button
+                      variant="contained"
+                      onClick={handleNext}
+                      endIcon={<ArrowForward />}
+                      disabled={
+                        (activeStep === 0 && !connectionType) ||
+                        (activeStep === 1 && (
+                          !config.name || 
+                          (connectionType === 'Connection String' && selectedConnector?.id === 'azure_blob' && !config.connection_string) ||
                       (connectionType === 'Service Principal' && selectedConnector?.id === 'azure_blob' && !config.name) ||
                       (connectionType === 'Standard Connection' && selectedConnector?.id === 'oracle_db' && (!config.host || !config.service_name || !config.username || !config.password)) ||
                       (connectionType === 'JDBC' && selectedConnector?.id === 'oracle_db' && (!config.jdbc_url || !config.username || !config.password))
@@ -1914,6 +1952,8 @@ const ConnectorsPage = () => {
                 >
                   Next
                 </Button>
+                  </span>
+                </Tooltip>
               )}
             </Box>
           </Box>
