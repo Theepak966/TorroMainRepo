@@ -135,6 +135,7 @@ const AssetsPage = () => {
   const [starburstUser, setStarburstUser] = useState('');
   const [starburstPassword, setStarburstPassword] = useState('');
   const [starburstHttpScheme, setStarburstHttpScheme] = useState('https');
+  const [starburstVerifySsl, setStarburstVerifySsl] = useState(true);
   const [starburstCatalog, setStarburstCatalog] = useState('');
   const [starburstSchema, setStarburstSchema] = useState('');
   const [starburstTableName, setStarburstTableName] = useState('');
@@ -656,6 +657,7 @@ const AssetsPage = () => {
     setStarburstUser('');
     setStarburstPassword('');
     setStarburstHttpScheme('https');
+    setStarburstVerifySsl(true);
     setStarburstViewSql('');
     setStarburstError('');
     setStarburstSuccess('');
@@ -681,12 +683,14 @@ const AssetsPage = () => {
         },
         body: JSON.stringify({
           preview_only: true,
+          validate_connection: true,
           connection: {
             host: starburstHost,
             port: starburstPort ? Number(starburstPort) : 443,
             user: starburstUser,
             password: starburstPassword,
             http_scheme: starburstHttpScheme,
+            verify_ssl: starburstVerifySsl,
           },
           catalog: starburstCatalog,
           schema: starburstSchema,
@@ -701,7 +705,7 @@ const AssetsPage = () => {
       }
 
       setStarburstViewSql(data.view_sql || '');
-      setStarburstSuccess('Generated Starburst masking view SQL. Review below before ingesting.');
+      setStarburstSuccess('Authenticated to Starburst and generated analytical + operational masking view SQL. Review below before ingesting.');
     } catch (error) {
       console.error('Error generating Starburst view SQL:', error);
       setStarburstError(error?.message || 'Failed to generate Starburst view SQL');
@@ -730,6 +734,7 @@ const AssetsPage = () => {
             user: starburstUser,
             password: starburstPassword,
             http_scheme: starburstHttpScheme,
+            verify_ssl: starburstVerifySsl,
           },
           catalog: starburstCatalog,
           schema: starburstSchema,
@@ -2153,6 +2158,19 @@ const AssetsPage = () => {
                   value={starburstPassword}
                   onChange={(e) => setStarburstPassword(e.target.value)}
                 />
+              </Grid>
+              <Grid item xs={12}>
+                <Tooltip title="If your Starburst uses a self-signed certificate, turn this off to allow the connection.">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={starburstVerifySsl}
+                        onChange={(e) => setStarburstVerifySsl(e.target.checked)}
+                      />
+                    }
+                    label="Verify SSL certificate"
+                  />
+                </Tooltip>
               </Grid>
             </Grid>
 

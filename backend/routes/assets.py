@@ -146,7 +146,17 @@ FROM {full_table};"""
     return view_sql, masking_summary
 
 
-def execute_starburst_view_sql(host: str, port: int, user: str, password: str, http_scheme: str, sql: str):
+def execute_starburst_view_sql(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    http_scheme: str,
+    sql: str,
+    catalog: str = None,
+    schema: str = None,
+    verify: bool = True,
+):
     """
     Execute a CREATE VIEW statement in Starburst/Trino using basic authentication.
     Connection details are provided per request and are not stored.
@@ -166,6 +176,9 @@ def execute_starburst_view_sql(host: str, port: int, user: str, password: str, h
             user=user,
             http_scheme=http_scheme or "https",
             auth=auth,
+            catalog=catalog,
+            schema=schema,
+            verify=verify,
         )
         cur = conn.cursor()
         cur.execute(sql)
@@ -175,6 +188,32 @@ def execute_starburst_view_sql(host: str, port: int, user: str, password: str, h
                 conn.close()
             except Exception:
                 pass
+
+
+def test_starburst_connection(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    http_scheme: str,
+    catalog: str = None,
+    schema: str = None,
+    verify: bool = True,
+):
+    """
+    Authenticate to Starburst/Trino and run a cheap query to validate credentials.
+    """
+    execute_starburst_view_sql(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        http_scheme=http_scheme,
+        sql="SELECT 1",
+        catalog=catalog,
+        schema=schema,
+        verify=verify,
+    )
 
 @assets_bp.route('/api/assets', methods=['GET'])
 @handle_error
@@ -1096,7 +1135,7 @@ def publish_asset(asset_id):
         db.close()
 
 
-@assets_bp.route('/api/assets/<int:asset_id>/starburst/ingest', methods=['POST'])
+@assets_bp.route('/api/assets/<asset_id>/starburst/ingest', methods=['POST'])
 @handle_error
 def ingest_asset_to_starburst(asset_id):
     """
@@ -1136,6 +1175,53 @@ def ingest_asset_to_starburst(asset_id):
             return jsonify({"error": "Both catalog and schema are required"}), 400
 
         columns = normalize_columns(asset.columns or [])
+
+        conn_cfg = payload.get("connection") or {}
+        host = (conn_cfg.get("host") or "").strip()
+        try:
+            port_raw = conn_cfg.get("port")
+            port = int(port_raw) if port_raw not in (None, "") else 443
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid Starburst port"}), 400
+        user = (conn_cfg.get("user") or "torro_user").strip() or "torro_user"
+        password = conn_cfg.get("password") or ""
+        http_scheme = (conn_cfg.get("http_scheme") or "https").strip() or "https"
+        verify_ssl = conn_cfg.get("verify_ssl", True)
+        if "skip_ssl_verification" in conn_cfg:
+            try:
+                verify_ssl = not bool(conn_cfg.get("skip_ssl_verification"))
+            except Exception:
+                pass
+        verify_ssl = bool(verify_ssl)
+
+        # If requested, authenticate to Starburst first (so UI can show auth errors before SQL preview/ingest)
+        validate_connection = bool(payload.get("validate_connection", False))
+        if validate_connection:
+            if not host:
+                return jsonify({"error": "Starburst host is required to authenticate"}), 400
+            if not STARBURST_AVAILABLE:
+                return jsonify({"error": "Starburst/Trino client library (trino) is not installed on the server."}), 503
+            try:
+                test_starburst_connection(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    http_scheme=http_scheme,
+                    catalog=catalog,
+                    schema=schema,
+                    verify=verify_ssl,
+                )
+            except Exception as e:
+                logger.error(
+                    "FN:ingest_asset_to_starburst_auth_failed asset_id:%s host:%s port:%s error:%s",
+                    asset_id,
+                    host,
+                    port,
+                    str(e),
+                    exc_info=True,
+                )
+                return jsonify({"error": f"Starburst authentication failed: {str(e)}"}), 400
 
         try:
             analytical_view_name = base_view_name
@@ -1194,20 +1280,8 @@ def ingest_asset_to_starburst(asset_id):
         if not STARBURST_AVAILABLE:
             return jsonify({"error": "Starburst/Trino client library (trino) is not installed on the server."}), 503
 
-        conn_cfg = payload.get("connection") or {}
-        host = (conn_cfg.get("host") or "").strip()
         if not host:
             return jsonify({"error": "Starburst host is required to ingest the view"}), 400
-
-        try:
-            port_raw = conn_cfg.get("port")
-            port = int(port_raw) if port_raw not in (None, "") else 443
-        except (TypeError, ValueError):
-            return jsonify({"error": "Invalid Starburst port"}), 400
-
-        user = (conn_cfg.get("user") or "torro_user").strip() or "torro_user"
-        password = conn_cfg.get("password") or ""
-        http_scheme = (conn_cfg.get("http_scheme") or "https").strip() or "https"
 
         try:
             # Analytical view
@@ -1218,6 +1292,9 @@ def ingest_asset_to_starburst(asset_id):
                 password=password,
                 http_scheme=http_scheme,
                 sql=analytical_sql,
+                catalog=catalog,
+                schema=schema,
+                verify=verify_ssl,
             )
             # Operational view
             execute_starburst_view_sql(
@@ -1227,6 +1304,9 @@ def ingest_asset_to_starburst(asset_id):
                 password=password,
                 http_scheme=http_scheme,
                 sql=operational_sql,
+                catalog=catalog,
+                schema=schema,
+                verify=verify_ssl,
             )
         except Exception as e:
             logger.error(
