@@ -1705,12 +1705,14 @@ const AssetsPage = () => {
           Discovered Assets
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-          <Button
-            variant="outlined"
-            startIcon={<Refresh />}
-            onClick={async () => {
-              try {
-                setLoading(true);
+          <Tooltip title="Refresh the assets list to get the latest data from the database">
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={<Refresh />}
+                onClick={async () => {
+                  try {
+                    setLoading(true);
                 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                 
                 
@@ -1817,15 +1819,21 @@ const AssetsPage = () => {
           >
             Refresh
           </Button>
-          <Button
-            variant="outlined"
-            startIcon={<DataObject />}
-            endIcon={<ArrowDropDown />}
-            onClick={(e) => setRemoveDuplicatesMenuAnchor(e.currentTarget)}
-            disabled={loading}
-          >
-            Remove Duplicates
-          </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Remove duplicate assets with identical column schemas. Only the latest modified asset is kept visible.">
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={<DataObject />}
+                endIcon={<ArrowDropDown />}
+                onClick={(e) => setRemoveDuplicatesMenuAnchor(e.currentTarget)}
+                disabled={loading}
+              >
+                Remove Duplicates
+              </Button>
+            </span>
+          </Tooltip>
           <Menu
             anchorEl={removeDuplicatesMenuAnchor}
             open={Boolean(removeDuplicatesMenuAnchor)}
@@ -1874,7 +1882,9 @@ const AssetsPage = () => {
                 }
               }}
             >
-              Hide duplicates
+              <Tooltip title="Hide duplicate assets with identical column schemas. Only the latest modified asset will remain visible." placement="right">
+                <span>Hide duplicates</span>
+              </Tooltip>
             </MenuItem>
             <MenuItem
               onClick={async () => {
@@ -1884,7 +1894,9 @@ const AssetsPage = () => {
                 await fetchHiddenDuplicates(1);
               }}
             >
-              View hidden duplicates
+              <Tooltip title="View and restore previously hidden duplicate assets" placement="right">
+                <span>View hidden duplicates</span>
+              </Tooltip>
             </MenuItem>
           </Menu>
         </Box>
@@ -1990,14 +2002,18 @@ const AssetsPage = () => {
                         {row.storage_path || '—'}
                       </TableCell>
                       <TableCell align="right">
-                        <Button
-                          variant="contained"
-                          size="small"
-                          onClick={() => restoreHiddenDuplicate(row.discovery_id)}
-                          disabled={loading}
-                        >
-                          Restore
-                        </Button>
+                        <Tooltip title="Restore this hidden duplicate asset to make it visible again">
+                          <span>
+                            <Button
+                              variant="contained"
+                              size="small"
+                              onClick={() => restoreHiddenDuplicate(row.discovery_id)}
+                              disabled={loading}
+                            >
+                              Restore
+                            </Button>
+                          </span>
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -2046,15 +2062,19 @@ const AssetsPage = () => {
                 />
             </Grid>
             <Grid item xs={12} md={2}>
-              <Button
-                fullWidth
-                variant="outlined"
-                onClick={(e) => setTypeMenuAnchor(e.currentTarget)}
-                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-              >
-                {typeFilter.length === 0 ? 'All Types' : `${typeFilter.length} Selected`}
-                <FilterList fontSize="small" />
-              </Button>
+              <Tooltip title="Filter assets by data type (e.g., Table, View, File)">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    onClick={(e) => setTypeMenuAnchor(e.currentTarget)}
+                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+                  >
+                    {typeFilter.length === 0 ? 'All Types' : `${typeFilter.length} Selected`}
+                    <FilterList fontSize="small" />
+                  </Button>
+                </span>
+              </Tooltip>
               <Menu
                 anchorEl={typeMenuAnchor}
                 open={Boolean(typeMenuAnchor)}
@@ -2075,15 +2095,19 @@ const AssetsPage = () => {
               </Menu>
             </Grid>
             <Grid item xs={12} md={2.5}>
-              <Button
-                fullWidth
-                variant="outlined"
-                onClick={(e) => setCatalogMenuAnchor(e.currentTarget)}
-                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-              >
-                {catalogFilter.length === 0 ? 'All Catalogs' : `${catalogFilter.length} Selected`}
-                <FilterList fontSize="small" />
-              </Button>
+              <Tooltip title="Filter assets by catalog/database name">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    onClick={(e) => setCatalogMenuAnchor(e.currentTarget)}
+                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+                  >
+                    {catalogFilter.length === 0 ? 'All Catalogs' : `${catalogFilter.length} Selected`}
+                    <FilterList fontSize="small" />
+                  </Button>
+                </span>
+              </Tooltip>
               <Menu
                 anchorEl={catalogMenuAnchor}
                 open={Boolean(catalogMenuAnchor)}
@@ -2104,15 +2128,19 @@ const AssetsPage = () => {
               </Menu>
             </Grid>
             <Grid item xs={12} md={2}>
-              <Button
-                fullWidth
-                variant="outlined"
-                onClick={(e) => setStatusMenuAnchor(e.currentTarget)}
-                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-              >
-                {approvalStatusFilter.length === 0 ? 'All Statuses' : `${approvalStatusFilter.length} Selected`}
-                <FilterList fontSize="small" />
-              </Button>
+              <Tooltip title="Filter assets by approval status (Pending Review, Approved, Rejected)">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    onClick={(e) => setStatusMenuAnchor(e.currentTarget)}
+                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+                  >
+                    {approvalStatusFilter.length === 0 ? 'All Statuses' : `${approvalStatusFilter.length} Selected`}
+                    <FilterList fontSize="small" />
+                  </Button>
+                </span>
+              </Tooltip>
               <Menu
                 anchorEl={statusMenuAnchor}
                 open={Boolean(statusMenuAnchor)}
@@ -2139,15 +2167,19 @@ const AssetsPage = () => {
               </Menu>
             </Grid>
             <Grid item xs={12} md={2}>
-              <Button
-                fullWidth
-                variant="outlined"
-                onClick={(e) => setApplicationMenuAnchor(e.currentTarget)}
-                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-              >
-                {applicationNameFilter.length === 0 ? 'All Applications' : `${applicationNameFilter.length} Selected`}
-                <FilterList fontSize="small" />
-              </Button>
+              <Tooltip title="Filter assets by application name">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    onClick={(e) => setApplicationMenuAnchor(e.currentTarget)}
+                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+                  >
+                    {applicationNameFilter.length === 0 ? 'All Applications' : `${applicationNameFilter.length} Selected`}
+                    <FilterList fontSize="small" />
+                  </Button>
+                </span>
+              </Tooltip>
               <Menu
                 anchorEl={applicationMenuAnchor}
                 open={Boolean(applicationMenuAnchor)}
@@ -2168,32 +2200,40 @@ const AssetsPage = () => {
               </Menu>
             </Grid>
             <Grid item xs={12} md={1.5}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<FilterList />}
-                onClick={() => {
-                  setSearchTerm('');
-                  setTypeFilter([]);
-                  setCatalogFilter([]);
-                  setApprovalStatusFilter([]);
-                  setApplicationNameFilter([]);
-                  setCurrentPage(0);
-                }}
-              >
-                Clear
-              </Button>
+              <Tooltip title="Clear all filters and search terms">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    startIcon={<FilterList />}
+                    onClick={() => {
+                      setSearchTerm('');
+                      setTypeFilter([]);
+                      setCatalogFilter([]);
+                      setApprovalStatusFilter([]);
+                      setApplicationNameFilter([]);
+                      setCurrentPage(0);
+                    }}
+                  >
+                    Clear
+                  </Button>
+                </span>
+              </Tooltip>
             </Grid>
             <Grid item xs={12} md={1}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<Settings />}
-                onClick={() => setMetadataSettingsOpen(true)}
-                sx={{ textTransform: 'none' }}
-              >
-                Settings
-              </Button>
+              <Tooltip title="Configure which metadata fields are visible in the asset details">
+                <span>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    startIcon={<Settings />}
+                    onClick={() => setMetadataSettingsOpen(true)}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    Settings
+                  </Button>
+                </span>
+              </Tooltip>
             </Grid>
           </Grid>
         </CardContent>
@@ -2301,66 +2341,86 @@ const AssetsPage = () => {
                       </TableCell>
                       <TableCell>
                         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                          <Button
-                            size="small"
-                            startIcon={<Visibility />}
-                            variant="outlined"
-                            onClick={() => handleViewAsset(asset.id)}
-                          >
-                            View
-                          </Button>
+                          <Tooltip title="View detailed information about this asset">
+                            <span>
+                              <Button
+                                size="small"
+                                startIcon={<Visibility />}
+                                variant="outlined"
+                                onClick={() => handleViewAsset(asset.id)}
+                              >
+                                View
+                              </Button>
+                            </span>
+                          </Tooltip>
                           {(asset.operational_metadata?.approval_status === 'pending_review' || 
                             !asset.operational_metadata?.approval_status ||
                             asset.operational_metadata?.approval_status === 'pending') && (
                             <>
-                              <Button
-                                size="small"
-                                startIcon={<ThumbUp />}
-                                variant="contained"
-                                color="success"
-                                onClick={() => handleApproveAsset(asset.id)}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="small"
-                                startIcon={<ThumbDown />}
-                                variant="contained"
-                                color="error"
-                                onClick={() => handleRejectClick(asset.id)}
-                              >
-                                Reject
-                              </Button>
+                              <Tooltip title="Approve this asset for use">
+                                <span>
+                                  <Button
+                                    size="small"
+                                    startIcon={<ThumbUp />}
+                                    variant="contained"
+                                    color="success"
+                                    onClick={() => handleApproveAsset(asset.id)}
+                                  >
+                                    Approve
+                                  </Button>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Reject this asset and provide a reason">
+                                <span>
+                                  <Button
+                                    size="small"
+                                    startIcon={<ThumbDown />}
+                                    variant="contained"
+                                    color="error"
+                                    onClick={() => handleRejectClick(asset.id)}
+                                  >
+                                    Reject
+                                  </Button>
+                                </span>
+                              </Tooltip>
                             </>
                           )}
                           {asset.operational_metadata?.approval_status === 'approved' && (
                             <>
-                            <Chip
-                              icon={<CheckCircle />}
-                              label="Approved"
-                              color="success"
-                              size="small"
-                            />
-                              <Button
+                            <Tooltip title="This asset has been approved for use">
+                              <Chip
+                                icon={<CheckCircle />}
+                                label="Approved"
+                                color="success"
                                 size="small"
-                                startIcon={<Publish />}
-                                variant="contained"
-                                color="primary"
-                                onClick={() => handlePublishAsset(asset.id)}
-                                disabled={publishing}
-                              >
-                                {asset.operational_metadata?.publish_status === 'published' ? 'Republish' : 'Publish'}
-                              </Button>
+                              />
+                            </Tooltip>
+                              <Tooltip title={asset.operational_metadata?.publish_status === 'published' ? 'Republish this asset to update its published version' : 'Publish this approved asset'}>
+                                <span>
+                                  <Button
+                                    size="small"
+                                    startIcon={<Publish />}
+                                    variant="contained"
+                                    color="primary"
+                                    onClick={() => handlePublishAsset(asset.id)}
+                                    disabled={publishing}
+                                  >
+                                    {asset.operational_metadata?.publish_status === 'published' ? 'Republish' : 'Publish'}
+                                  </Button>
+                                </span>
+                              </Tooltip>
                             </>
                           )}
                           {asset.operational_metadata?.approval_status === 'rejected' && (
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                              <Chip
-                                icon={<Close />}
-                                label="Rejected"
-                                color="error"
-                                size="small"
-                              />
+                              <Tooltip title="This asset has been rejected. See reason below.">
+                                <Chip
+                                  icon={<Close />}
+                                  label="Rejected"
+                                  color="error"
+                                  size="small"
+                                />
+                              </Tooltip>
                               {asset.operational_metadata?.rejection_reason && (
                                 <Typography variant="caption" color="error" sx={{ fontSize: '0.7rem', fontStyle: 'italic', maxWidth: '250px', wordWrap: 'break-word' }}>
                                   Reason: {asset.operational_metadata.rejection_reason}
@@ -3559,65 +3619,85 @@ const AssetsPage = () => {
                     </Typography>
                     <Box display="flex" gap={1} alignItems="center">
                       {showColumnCheckboxes && (
-                        <Button
-                          variant="contained"
-                          color="primary"
-                          onClick={handleExportSelected}
-                          startIcon={<FileDownload />}
-                          disabled={selectedColumns.length === 0}
-                        >
-                          Export Selected ({selectedColumns.length})
-                        </Button>
+                        <Tooltip title={`Export ${selectedColumns.length} selected column(s) to CSV`}>
+                          <span>
+                            <Button
+                              variant="contained"
+                              color="primary"
+                              onClick={handleExportSelected}
+                              startIcon={<FileDownload />}
+                              disabled={selectedColumns.length === 0}
+                            >
+                              Export Selected ({selectedColumns.length})
+                            </Button>
+                          </span>
+                        </Tooltip>
                       )}
-                      <Button
-                        variant="outlined"
-                        color="primary"
-                        startIcon={<Add />}
-                        onClick={() => setAddColumnDialogOpen(true)}
-                      >
-                        Add Column
-                      </Button>
-                      <Button
-                        variant="outlined"
-                        startIcon={<FileDownload />}
-                        endIcon={<ArrowDropDown />}
-                        onClick={(e) => setExportAnchorEl(e.currentTarget)}
-                      >
-                        EXPORT
-                      </Button>
+                      <Tooltip title="Add a custom column to track additional information for each column">
+                        <span>
+                          <Button
+                            variant="outlined"
+                            color="primary"
+                            startIcon={<Add />}
+                            onClick={() => setAddColumnDialogOpen(true)}
+                          >
+                            Add Column
+                          </Button>
+                        </span>
+                      </Tooltip>
+                      <Tooltip title="Export column data in various formats">
+                        <span>
+                          <Button
+                            variant="outlined"
+                            startIcon={<FileDownload />}
+                            endIcon={<ArrowDropDown />}
+                            onClick={(e) => setExportAnchorEl(e.currentTarget)}
+                          >
+                            EXPORT
+                          </Button>
+                        </span>
+                      </Tooltip>
                     </Box>
                     <Menu
                       anchorEl={exportAnchorEl}
                       open={Boolean(exportAnchorEl)}
                       onClose={() => setExportAnchorEl(null)}
                     >
-                      <MenuItem onClick={() => {
-                        handleExportTemplate();
-                        setExportAnchorEl(null);
-                      }}>
-                        <ListItemText 
-                          primary="Download Template"
-                          secondary="Empty template with headers"
-                        />
-                      </MenuItem>
-                      <MenuItem onClick={() => {
-                        handleExportPII();
-                        setExportAnchorEl(null);
-                      }}>
-                        <ListItemText primary="Export only PII" />
-                      </MenuItem>
-                      <MenuItem onClick={() => {
-                        handleExportAll();
-                        setExportAnchorEl(null);
-                      }}>
-                        <ListItemText primary="Export all columns" />
-                      </MenuItem>
-                      <MenuItem onClick={() => {
-                        setShowColumnCheckboxes(true);
-                        setExportAnchorEl(null);
-                      }}>
-                        <ListItemText primary="Export only selected columns" />
-                      </MenuItem>
+                      <Tooltip title="Download an empty CSV template with column headers" placement="right">
+                        <MenuItem onClick={() => {
+                          handleExportTemplate();
+                          setExportAnchorEl(null);
+                        }}>
+                          <ListItemText 
+                            primary="Download Template"
+                            secondary="Empty template with headers"
+                          />
+                        </MenuItem>
+                      </Tooltip>
+                      <Tooltip title="Export only columns marked as containing PII data" placement="right">
+                        <MenuItem onClick={() => {
+                          handleExportPII();
+                          setExportAnchorEl(null);
+                        }}>
+                          <ListItemText primary="Export only PII" />
+                        </MenuItem>
+                      </Tooltip>
+                      <Tooltip title="Export all columns for the selected asset" placement="right">
+                        <MenuItem onClick={() => {
+                          handleExportAll();
+                          setExportAnchorEl(null);
+                        }}>
+                          <ListItemText primary="Export all columns" />
+                        </MenuItem>
+                      </Tooltip>
+                      <Tooltip title="Select specific columns to export using checkboxes" placement="right">
+                        <MenuItem onClick={() => {
+                          setShowColumnCheckboxes(true);
+                          setExportAnchorEl(null);
+                        }}>
+                          <ListItemText primary="Export only selected columns" />
+                        </MenuItem>
+                      </Tooltip>
                     </Menu>
                   </Box>
                   {(() => {
@@ -3672,10 +3752,11 @@ const AssetsPage = () => {
                                     <TableCell key={columnId}>
                                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                         {customCol.label}
-                                        <IconButton
-                                          size="small"
-                                          onClick={async () => {
-                                            if (confirm(`Delete custom column "${customCol.label}"?`)) {
+                                        <Tooltip title={`Delete custom column "${customCol.label}"`}>
+                                          <IconButton
+                                            size="small"
+                                            onClick={async () => {
+                                              if (confirm(`Delete custom column "${customCol.label}"?`)) {
                                               const updatedCustomColumns = { ...customColumns };
                                               delete updatedCustomColumns[columnId];
                                               setCustomColumns(updatedCustomColumns);
@@ -3706,6 +3787,7 @@ const AssetsPage = () => {
                                         >
                                           <Close fontSize="small" />
                                         </IconButton>
+                                        </Tooltip>
                                       </Box>
                                     </TableCell>
                                   ))}
@@ -3857,23 +3939,27 @@ const AssetsPage = () => {
                                       </TableCell>
                                       <TableCell>
                                         {column.pii_detected ? (
-                                          <Chip 
-                                            icon={<Warning />}
-                                            label={`PII: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`} 
-                                            color="error" 
-                                            size="small"
-                                            sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
-                                            onClick={() => handleOpenPiiDialog(column)}
-                                          />
+                                          <Tooltip title={`Click to edit PII status and masking logic. Detected types: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`}>
+                                            <Chip 
+                                              icon={<Warning />}
+                                              label={`PII: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`} 
+                                              color="error" 
+                                              size="small"
+                                              sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
+                                              onClick={() => handleOpenPiiDialog(column)}
+                                            />
+                                          </Tooltip>
                                         ) : (
-                                          <Chip 
-                                            icon={<CheckCircle />}
-                                            label="No PII" 
-                                            color="success" 
-                                            size="small"
-                                            sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
-                                            onClick={() => handleOpenPiiDialog(column)}
-                                          />
+                                          <Tooltip title="Click to mark this column as containing PII data">
+                                            <Chip 
+                                              icon={<CheckCircle />}
+                                              label="No PII" 
+                                              color="success" 
+                                              size="small"
+                                              sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
+                                              onClick={() => handleOpenPiiDialog(column)}
+                                            />
+                                          </Tooltip>
                                         )}
                                       </TableCell>
                                       {/* Custom columns cells */}
