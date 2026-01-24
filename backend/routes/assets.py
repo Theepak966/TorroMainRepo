@@ -45,7 +45,15 @@ def _quote_starburst_identifier(identifier: str) -> str:
     return f'"{value}"'
 
 
-def generate_starburst_masked_view_sql(asset, columns, catalog: str, schema: str, table_name: str, view_name: str):
+def generate_starburst_masked_view_sql(
+    asset,
+    columns,
+    catalog: str,
+    schema: str,
+    table_name: str,
+    view_name: str,
+    mode: str = "analytical",
+):
     """
     Generate a Starburst/Trino-compatible CREATE VIEW statement with masking applied.
 
@@ -56,10 +64,18 @@ def generate_starburst_masked_view_sql(asset, columns, catalog: str, schema: str
     if not catalog or not schema:
         raise ValueError("catalog and schema are required for Starburst view generation")
 
+    mode_normalized = (mode or "analytical").lower()
+    if mode_normalized not in ("analytical", "operational"):
+        mode_normalized = "analytical"
+
     if not table_name:
         table_name = asset.name
     if not view_name:
-        view_name = f"{table_name}_masked"
+        # Default view name depends on masking mode
+        if mode_normalized == "analytical":
+            view_name = f"{table_name}_masked_analytical"
+        else:
+            view_name = f"{table_name}_masked_operational"
 
     q_catalog = _quote_starburst_identifier(catalog)
     q_schema = _quote_starburst_identifier(schema)
@@ -79,7 +95,10 @@ def generate_starburst_masked_view_sql(asset, columns, catalog: str, schema: str
 
         q_col = _quote_starburst_identifier(col_name)
         pii_detected = bool(col.get("pii_detected"))
-        masking_logic = col.get("masking_logic_analytical")
+        if mode_normalized == "analytical":
+            masking_logic = col.get("masking_logic_analytical")
+        else:
+            masking_logic = col.get("masking_logic_operational")
         masking_logic_str = str(masking_logic) if masking_logic not in (None, "") else ""
         logic_norm = masking_logic_str.strip().lower()
 
@@ -1111,7 +1130,7 @@ def ingest_asset_to_starburst(asset_id):
         catalog = (payload.get("catalog") or "").strip()
         schema = (payload.get("schema") or "").strip()
         table_name = (payload.get("table_name") or "").strip() or asset.name
-        view_name = (payload.get("view_name") or "").strip() or f"{table_name}_masked"
+        base_view_name = (payload.get("view_name") or "").strip() or f"{table_name}_masked"
 
         if not catalog or not schema:
             return jsonify({"error": "Both catalog and schema are required"}), 400
@@ -1119,8 +1138,27 @@ def ingest_asset_to_starburst(asset_id):
         columns = normalize_columns(asset.columns or [])
 
         try:
-            view_sql, masking_summary = generate_starburst_masked_view_sql(
-                asset, columns, catalog=catalog, schema=schema, table_name=table_name, view_name=view_name
+            analytical_view_name = base_view_name
+            operational_view_name = f"{base_view_name}_operational"
+
+            analytical_sql, analytical_summary = generate_starburst_masked_view_sql(
+                asset,
+                columns,
+                catalog=catalog,
+                schema=schema,
+                table_name=table_name,
+                view_name=analytical_view_name,
+                mode="analytical",
+            )
+
+            operational_sql, operational_summary = generate_starburst_masked_view_sql(
+                asset,
+                columns,
+                catalog=catalog,
+                schema=schema,
+                table_name=table_name,
+                view_name=operational_view_name,
+                mode="operational",
             )
         except Exception as e:
             logger.error(
@@ -1131,22 +1169,28 @@ def ingest_asset_to_starburst(asset_id):
             )
             return jsonify({"error": f"Failed to generate Starburst view SQL: {str(e)}"}), 400
 
+        combined_sql = f"{analytical_sql}\n\n-- Operational masked view\n{operational_sql}"
+
         response_data = {
             "success": True,
             "preview_only": preview_only,
             "catalog": catalog,
             "schema": schema,
             "table_name": table_name,
-            "view_name": view_name,
-            "view_sql": view_sql,
-            "masking_summary": masking_summary,
+            "view_name_analytical": analytical_view_name,
+            "view_name_operational": operational_view_name,
+            "view_sql_analytical": analytical_sql,
+            "view_sql_operational": operational_sql,
+            "view_sql": combined_sql,
+            "masking_summary_analytical": analytical_summary,
+            "masking_summary_operational": operational_summary,
         }
 
         if preview_only:
             # Only return the generated SQL and masking summary, do not connect to Starburst
             return jsonify(response_data), 200
 
-        # Ingest into Starburst Enterprise (execute CREATE OR REPLACE VIEW)
+        # Ingest into Starburst Enterprise (execute CREATE OR REPLACE VIEW for both analytical and operational)
         if not STARBURST_AVAILABLE:
             return jsonify({"error": "Starburst/Trino client library (trino) is not installed on the server."}), 503
 
@@ -1166,13 +1210,23 @@ def ingest_asset_to_starburst(asset_id):
         http_scheme = (conn_cfg.get("http_scheme") or "https").strip() or "https"
 
         try:
+            # Analytical view
             execute_starburst_view_sql(
                 host=host,
                 port=port,
                 user=user,
                 password=password,
                 http_scheme=http_scheme,
-                sql=view_sql,
+                sql=analytical_sql,
+            )
+            # Operational view
+            execute_starburst_view_sql(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                http_scheme=http_scheme,
+                sql=operational_sql,
             )
         except Exception as e:
             logger.error(
