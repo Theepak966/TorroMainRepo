@@ -1764,29 +1764,29 @@ const DataLineagePage = () => {
         <Box sx={{ display: 'flex', gap: 2 }}>
           <Tooltip title="Manually create lineage relationships between assets">
             <span>
-              <Button
-                variant="outlined"
-                startIcon={<Add />}
-                onClick={() => setManualLineageOpen(true)}
-                sx={{ height: 40 }}
-              >
-                Manual Lineage
-              </Button>
+          <Button
+            variant="outlined"
+            startIcon={<Add />}
+            onClick={() => setManualLineageOpen(true)}
+            sx={{ height: 40 }}
+          >
+            Manual Lineage
+          </Button>
             </span>
           </Tooltip>
           <Tooltip title="Refresh the lineage graph to get the latest data relationships">
             <span>
-              <Button
-                variant="contained"
-                startIcon={<Refresh />}
-                onClick={() => {
-                  fetchLineage();
-                }}
-                disabled={loading}
-                sx={{ height: 40 }}
-              >
-                Refresh
-              </Button>
+          <Button
+            variant="contained"
+            startIcon={<Refresh />}
+            onClick={() => {
+              fetchLineage();
+            }}
+            disabled={loading}
+            sx={{ height: 40 }}
+          >
+            Refresh
+          </Button>
             </span>
           </Tooltip>
         </Box>
@@ -1910,19 +1910,19 @@ const DataLineagePage = () => {
             <Grid item xs={12} md={2}>
               <Tooltip title="Clear all filters and search terms">
                 <span>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    startIcon={<FilterList />}
-                    onClick={() => {
-                      setSearchTerm('');
-                      setFilterType('all');
-                      setFilterSource('all');
-                      handleAssetSelection(null);
-                    }}
-                  >
-                    Clear All
-                  </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                startIcon={<FilterList />}
+                onClick={() => {
+                  setSearchTerm('');
+                  setFilterType('all');
+                  setFilterSource('all');
+                  handleAssetSelection(null);
+                }}
+              >
+                Clear All
+              </Button>
                 </span>
               </Tooltip>
             </Grid>
@@ -1931,42 +1931,42 @@ const DataLineagePage = () => {
                 <Grid item xs={12} md={2}>
                   <Tooltip title="View lineage in hierarchical folder structure (container → folders → assets)">
                     <span>
-                      <Button
-                        fullWidth
-                        variant={lineageViewMode === 'hierarchical' ? 'contained' : 'outlined'}
-                        color={lineageViewMode === 'hierarchical' ? 'primary' : 'default'}
-                        onClick={async () => {
-                          setLineageViewMode('hierarchical');
-                          // Reload lineage when switching modes
-                          if (selectedAssetForLineage) {
-                            await handleAssetSelection(selectedAssetForLineage);
-                          }
-                        }}
-                        size="small"
-                      >
-                        Hierarchical
-                      </Button>
+                  <Button
+                    fullWidth
+                    variant={lineageViewMode === 'hierarchical' ? 'contained' : 'outlined'}
+                    color={lineageViewMode === 'hierarchical' ? 'primary' : 'default'}
+                    onClick={async () => {
+                      setLineageViewMode('hierarchical');
+                      // Reload lineage when switching modes
+                      if (selectedAssetForLineage) {
+                        await handleAssetSelection(selectedAssetForLineage);
+                      }
+                    }}
+                    size="small"
+                  >
+                    Hierarchical
+                  </Button>
                     </span>
                   </Tooltip>
                 </Grid>
                 <Grid item xs={12} md={2}>
                   <Tooltip title="View actual data dependency lineage (source → transform → target relationships)">
                     <span>
-                      <Button
-                        fullWidth
-                        variant={lineageViewMode === 'actual' ? 'contained' : 'outlined'}
-                        color={lineageViewMode === 'actual' ? 'primary' : 'default'}
-                        onClick={async () => {
-                          setLineageViewMode('actual');
-                          // Reload lineage when switching modes
-                          if (selectedAssetForLineage) {
-                            await handleAssetSelection(selectedAssetForLineage);
-                          }
-                        }}
-                        size="small"
-                      >
-                        Dependency Lineage
-                      </Button>
+                  <Button
+                    fullWidth
+                    variant={lineageViewMode === 'actual' ? 'contained' : 'outlined'}
+                    color={lineageViewMode === 'actual' ? 'primary' : 'default'}
+                    onClick={async () => {
+                      setLineageViewMode('actual');
+                      // Reload lineage when switching modes
+                      if (selectedAssetForLineage) {
+                        await handleAssetSelection(selectedAssetForLineage);
+                      }
+                    }}
+                    size="small"
+                  >
+                    Dependency Lineage
+                  </Button>
                     </span>
                   </Tooltip>
                 </Grid>
@@ -2175,20 +2175,20 @@ const DataLineagePage = () => {
           </Typography>
           <Tooltip title="Clear the selected asset and close the asset details panel">
             <span>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => {
-                  setSelectedAssetDetails(null);
-                  setSelectedAssetForLineage(null);
-                  setNodes([]);
-                  setEdges([]);
-                  setActiveDetailTab('basic');
-                }}
-                startIcon={<Close />}
-              >
-                Clear Selection
-              </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              setSelectedAssetDetails(null);
+              setSelectedAssetForLineage(null);
+              setNodes([]);
+              setEdges([]);
+              setActiveDetailTab('basic');
+            }}
+            startIcon={<Close />}
+          >
+            Clear Selection
+          </Button>
             </span>
           </Tooltip>
         </Box>
@@ -2284,64 +2284,64 @@ const DataLineagePage = () => {
             </Button>
               </span>
             </Tooltip>
-          </Box>
+                </Box>
           
           <CardContent sx={{ p: 4, minHeight: '350px', overflow: 'auto' }}>
             {}
             {activeDetailTab === 'basic' && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 {detailVisibility.basic['Asset Name'] && (
-                  <Box>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
-                      Asset Name
+                <Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                    Asset Name
                     </Typography>
-                    <Typography variant="h5" sx={{ fontWeight: 600, color: '#333' }}>
-                      {selectedAssetDetails.name}
+                  <Typography variant="h5" sx={{ fontWeight: 600, color: '#333' }}>
+                    {selectedAssetDetails.name}
                     </Typography>
-                  </Box>
+                </Box>
                 )}
 
                 {detailVisibility.basic['Asset ID'] && (
-                  <Box>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                <Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
                       Asset ID
                     </Typography>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: '#666' }}>
-                      {selectedAssetDetails.id}
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: '#666' }}>
+                    {selectedAssetDetails.id}
                     </Typography>
-                  </Box>
+                </Box>
                 )}
 
                 {(detailVisibility.basic['Type'] || detailVisibility.basic['Data Source']) && (
-                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                     {detailVisibility.basic['Type'] && (
-                      <Chip 
-                        label={selectedAssetDetails.type} 
-                        size="medium" 
-                        variant="outlined"
-                        sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
-                      />
+                  <Chip 
+                    label={selectedAssetDetails.type} 
+                    size="medium" 
+                    variant="outlined"
+                    sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
+                  />
                     )}
                     {detailVisibility.basic['Data Source'] && (
-                      <Chip 
-                        label={selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || selectedAssetDetails.connector_id || 'Azure Blob Storage'} 
-                        size="medium" 
-                        variant="outlined"
-                        sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
-                      />
+                  <Chip 
+                    label={selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || selectedAssetDetails.connector_id || 'Azure Blob Storage'} 
+                    size="medium" 
+                    variant="outlined"
+                    sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
+                  />
                     )}
-                  </Box>
+                </Box>
                 )}
 
                 {detailVisibility.basic['Catalog'] && (
-                  <Box>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
-                      Catalog
+                <Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                    Catalog
                     </Typography>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, color: '#666' }}>
-                      {selectedAssetDetails.catalog || 'N/A'}
-                    </Typography>
-                  </Box>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, color: '#666' }}>
+                    {selectedAssetDetails.catalog || 'N/A'}
+                      </Typography>
+                </Box>
                 )}
 
                 {detailVisibility.basic['Discovered At'] && (
@@ -2376,19 +2376,19 @@ const DataLineagePage = () => {
                           <TableHead>
                             <TableRow>
                           {detailVisibility.columns['Column Name'] && (
-                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Name</TableCell>
+                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Name</TableCell>
                           )}
                           {detailVisibility.columns['Data Type'] && (
-                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Type</TableCell>
+                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Type</TableCell>
                           )}
                           {detailVisibility.columns['PII Status'] && (
-                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>PII Status</TableCell>
+                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>PII Status</TableCell>
                           )}
                           {detailVisibility.columns['Description'] && (
-                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Description</TableCell>
+                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Description</TableCell>
                           )}
                           {detailVisibility.columns['Constraints'] && (
-                            <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Constraints</TableCell>
+                          <TableCell sx={{ fontWeight: 600, backgroundColor: '#f5f5f5' }}>Constraints</TableCell>
                           )}
                             </TableRow>
                           </TableHead>
@@ -2399,130 +2399,130 @@ const DataLineagePage = () => {
                           return (
                               <TableRow key={index}>
                               {detailVisibility.columns['Column Name'] && (
-                                <TableCell sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
-                                  {col.name}
-                                </TableCell>
+                              <TableCell sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                                {col.name}
+                              </TableCell>
                               )}
                               {detailVisibility.columns['Data Type'] && (
                                 <TableCell>
-                                  <Chip 
-                                    label={col.type} 
-                                    size="small" 
-                                    variant="outlined"
-                                    sx={{ borderColor: '#ddd', color: '#666' }}
-                                  />
+                                <Chip 
+                                  label={col.type} 
+                                  size="small" 
+                                  variant="outlined"
+                                  sx={{ borderColor: '#ddd', color: '#666' }}
+                                />
                                 </TableCell>
                               )}
                               {detailVisibility.columns['PII Status'] && (
-                                <TableCell>
-                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                    {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
-                                      <Chip 
-                                        label="PII" 
-                                        size="small" 
-                                        color="error"
-                                        sx={{ fontWeight: 600, cursor: 'pointer' }}
-                                        onClick={async () => {
-                                          try {
-                                            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                                            const response = await fetch(
-                                              `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
-                                              {
-                                                method: 'PUT',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({
-                                                  pii_detected: false,
-                                                  pii_types: null
-                                                })
-                                              }
-                                            );
-                                            if (response.ok) {
-                                              const updatedAsset = { ...selectedAssetDetails };
-                                              updatedAsset.columns = updatedAsset.columns.map(c => 
-                                                c.name === col.name 
-                                                  ? { ...c, pii_detected: false, pii_types: null }
-                                                  : c
-                                              );
-                                              setSelectedAssetDetails(updatedAsset);
+                              <TableCell>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  {(col.pii_detected !== undefined ? col.pii_detected : isPII) ? (
+                                    <Chip 
+                                      label="PII" 
+                                      size="small" 
+                                      color="error"
+                                      sx={{ fontWeight: 600, cursor: 'pointer' }}
+                                      onClick={async () => {
+                                        try {
+                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                          const response = await fetch(
+                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                            {
+                                              method: 'PUT',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                pii_detected: false,
+                                                pii_types: null
+                                              })
                                             }
-                                          } catch (err) {
-                                            console.error('Failed to update PII status:', err);
-                                          }
-                                        }}
-                                      />
-                                    ) : (
-                                      <Chip 
-                                        label="Safe" 
-                                        size="small" 
-                                        color="success"
-                                        variant="outlined"
-                                        sx={{ fontWeight: 500, cursor: 'pointer' }}
-                                        onClick={async () => {
-                                          try {
-                                            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-                                            const response = await fetch(
-                                              `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
-                                              {
-                                                method: 'PUT',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({
-                                                  pii_detected: true,
-                                                  pii_types: col.pii_types || ['PII']
-                                                })
-                                              }
+                                          );
+                                          if (response.ok) {
+                                            const updatedAsset = { ...selectedAssetDetails };
+                                            updatedAsset.columns = updatedAsset.columns.map(c => 
+                                              c.name === col.name 
+                                                ? { ...c, pii_detected: false, pii_types: null }
+                                                : c
                                             );
-                                            if (response.ok) {
-                                              const updatedAsset = { ...selectedAssetDetails };
-                                              updatedAsset.columns = updatedAsset.columns.map(c => 
-                                                c.name === col.name 
-                                                  ? { ...c, pii_detected: true, pii_types: c.pii_types || ['PII'] }
-                                                  : c
-                                              );
-                                              setSelectedAssetDetails(updatedAsset);
-                                            }
-                                          } catch (err) {
-                                            console.error('Failed to update PII status:', err);
+                                            setSelectedAssetDetails(updatedAsset);
                                           }
-                                        }}
-                                      />
-                                    )}
-                                  </Box>
-                                </TableCell>
+                                        } catch (err) {
+                                          console.error('Failed to update PII status:', err);
+                                        }
+                                      }}
+                                    />
+                                  ) : (
+                                    <Chip 
+                                      label="Safe" 
+                                      size="small" 
+                                      color="success"
+                                      variant="outlined"
+                                      sx={{ fontWeight: 500, cursor: 'pointer' }}
+                                      onClick={async () => {
+                                        try {
+                                          const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+                                          const response = await fetch(
+                                            `${API_BASE_URL}/api/assets/${selectedAssetDetails.id}/columns/${col.name}/pii`,
+                                            {
+                                              method: 'PUT',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                pii_detected: true,
+                                                pii_types: col.pii_types || ['PII']
+                                              })
+                                            }
+                                          );
+                                          if (response.ok) {
+                                            const updatedAsset = { ...selectedAssetDetails };
+                                            updatedAsset.columns = updatedAsset.columns.map(c => 
+                                              c.name === col.name 
+                                                ? { ...c, pii_detected: true, pii_types: c.pii_types || ['PII'] }
+                                                : c
+                                            );
+                                            setSelectedAssetDetails(updatedAsset);
+                                          }
+                                        } catch (err) {
+                                          console.error('Failed to update PII status:', err);
+                                        }
+                                      }}
+                                    />
+                                  )}
+                                </Box>
+                              </TableCell>
                               )}
                               {detailVisibility.columns['Description'] && (
-                                <TableCell sx={{ color: '#666' }}>
-                                  {col.description || '-'}
-                                </TableCell>
+                              <TableCell sx={{ color: '#666' }}>
+                                {col.description || '-'}
+                              </TableCell>
                               )}
                               {detailVisibility.columns['Constraints'] && (
-                                <TableCell>
-                                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                              <TableCell>
+                                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
                                     {detailVisibility.columns['Nullable'] && col.nullable === false && (
-                                      <Chip 
-                                        label="NOT NULL" 
-                                        size="small" 
-                                        variant="outlined"
-                                        sx={{ fontSize: 9, height: 20, borderColor: '#ff9800', color: '#ff9800' }}
-                                      />
-                                    )}
-                                    {col.unique && (
-                                      <Chip 
-                                        label="UNIQUE" 
-                                        size="small" 
-                                        variant="outlined"
-                                        sx={{ fontSize: 9, height: 20, borderColor: '#2196f3', color: '#2196f3' }}
-                                      />
-                                    )}
-                                    {col.primary_key && (
-                                      <Chip 
-                                        label="PK" 
-                                        size="small" 
-                                        color="primary"
-                                        sx={{ fontSize: 9, height: 20 }}
-                                      />
-                                    )}
-                                  </Box>
-                                </TableCell>
+                                    <Chip 
+                                      label="NOT NULL" 
+                                      size="small" 
+                                      variant="outlined"
+                                      sx={{ fontSize: 9, height: 20, borderColor: '#ff9800', color: '#ff9800' }}
+                                    />
+                                  )}
+                                  {col.unique && (
+                                    <Chip 
+                                      label="UNIQUE" 
+                                      size="small" 
+                                      variant="outlined"
+                                      sx={{ fontSize: 9, height: 20, borderColor: '#2196f3', color: '#2196f3' }}
+                                    />
+                                  )}
+                                  {col.primary_key && (
+                                    <Chip 
+                                      label="PK" 
+                                      size="small" 
+                                      color="primary"
+                                      sx={{ fontSize: 9, height: 20 }}
+                                    />
+                                  )}
+                                </Box>
+                              </TableCell>
                               )}
                               </TableRow>
                           );

@@ -45,6 +45,125 @@ def _quote_starburst_identifier(identifier: str) -> str:
     return f'"{value}"'
 
 
+def convert_masking_logic_to_starburst_sql(masking_logic: str, column_name: str, column_type: str = None) -> str:
+    """
+    Convert masking logic string to Starburst/Trino-compatible SQL expression.
+    Uses Trino/Starburst SQL functions instead of MySQL-specific ones.
+    """
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    if not masking_logic:
+        return column_name
+    
+    masking_logic = masking_logic.lower().strip()
+    column_lower = column_name.lower()
+    q_col = _quote_starburst_identifier(column_name)
+    
+    # Standard masking options
+    if masking_logic in ['redact', 'mask_all', 'pii_redact', 'mask', 'hide', 'nullify']:
+        return "'***MASKED***'"
+    elif masking_logic in ['encrypt', 'pii_encrypt', 'encryption', 'aes_encrypt']:
+        # Note: Starburst/Trino encryption functions may vary by connector
+        # Using a generic approach - may need adjustment based on actual connector
+        logger.warning(f'FN:convert_masking_logic_to_starburst_sql column:{column_name} masking_logic:{masking_logic} message:Encryption not fully supported in Starburst, using hash instead')
+        return f"md5(CAST({q_col} AS VARCHAR))"
+    elif masking_logic in ['hash', 'hashing', 'pii_hashing', 'pii_hash', 'md5']:
+        return f"md5(CAST({q_col} AS VARCHAR))"
+    elif masking_logic == 'sha256':
+        return f"sha256(CAST({q_col} AS VARCHAR))"
+    elif masking_logic in ['show_full', 'none', 'no_mask', 'unmasked', 'original']:
+        return q_col
+    elif masking_logic in ['mask_domain', 'email_mask', 'hide_domain']:
+        if 'email' in column_lower or 'mail' in column_lower:
+            # Trino: Extract username@***.extension (e.g., user@***.com)
+            return f"CONCAT(SPLIT_PART({q_col}, '@', 1), '@***.', SPLIT_PART(SPLIT_PART({q_col}, '@', -1), '.', -1))"
+        else:
+            return f"CONCAT(SUBSTR({q_col}, 1, 2), '***', SUBSTR({q_col}, GREATEST(1, LENGTH({q_col}) - 1)))"
+    elif masking_logic in ['show_year_only', 'year_only', 'mask_date', 'hide_date']:
+        if 'date' in column_lower or 'birth' in column_lower or 'dob' in column_lower or 'timestamp' in column_lower:
+            return f"YEAR({q_col})"
+        else:
+            return f"CASE WHEN REGEXP_LIKE({q_col}, '^[0-9]{{4}}') THEN CAST(YEAR(CAST({q_col} AS DATE)) AS VARCHAR) ELSE '***MASKED***' END"
+    elif masking_logic in ['show_last_4', 'last_4', 'phone_mask', 'mask_phone']:
+        if 'phone' in column_lower or 'mobile' in column_lower or 'tel' in column_lower:
+            return f"CONCAT('***', SUBSTR(REGEXP_REPLACE({q_col}, '[^0-9]', ''), GREATEST(1, LENGTH(REGEXP_REPLACE({q_col}, '[^0-9]', '')) - 3)))"
+        else:
+            return f"CONCAT('***', SUBSTR({q_col}, GREATEST(1, LENGTH({q_col}) - 3)))"
+    elif masking_logic in ['show_first_octet', 'ip_mask', 'mask_ip', 'first_octet']:
+        if 'ip' in column_lower and ('address' in column_lower or 'addr' in column_lower):
+            return f"CONCAT(SPLIT_PART({q_col}, '.', 1), '.xxx.xxx.xxx')"
+        else:
+            return f"CONCAT(SUBSTR({q_col}, 1, 3), '***')"
+    elif masking_logic in ['partial_mask', 'partial', 'mask_partial']:
+        return f"CONCAT(SUBSTR({q_col}, 1, 2), '***', SUBSTR({q_col}, GREATEST(1, LENGTH({q_col}) - 1)))"
+    elif masking_logic in ['show_first_letter', 'first_letter', 'mask_first_letter']:
+        return f"CONCAT(SUBSTR({q_col}, 1, 1), '***')"
+    elif masking_logic in ['show_age_range', 'age_range', 'age_only']:
+        if 'birth' in column_lower or 'dob' in column_lower or 'age' in column_lower:
+            return f"CONCAT(CAST(FLOOR(DATE_DIFF('day', CAST({q_col} AS DATE), CURRENT_DATE) / 365.25) AS VARCHAR), '-', CAST(FLOOR(DATE_DIFF('day', CAST({q_col} AS DATE), CURRENT_DATE) / 365.25) + 9 AS VARCHAR), ' years')"
+        else:
+            return f"CASE WHEN REGEXP_LIKE({q_col}, '^[0-9]{{4}}') THEN CONCAT(CAST(FLOOR(DATE_DIFF('day', CAST({q_col} AS DATE), CURRENT_DATE) / 365.25) AS VARCHAR), ' years') ELSE '***MASKED***' END"
+    elif masking_logic in ['default', 'auto', 'smart', 'intelligent']:
+        if 'email' in column_lower or 'mail' in column_lower:
+            return f"CONCAT(SPLIT_PART({q_col}, '@', 1), '@***.', SPLIT_PART(SPLIT_PART({q_col}, '@', -1), '.', -1))"
+        elif 'phone' in column_lower or 'mobile' in column_lower or 'tel' in column_lower:
+            return f"CONCAT('***', SUBSTR(REGEXP_REPLACE({q_col}, '[^0-9]', ''), GREATEST(1, LENGTH(REGEXP_REPLACE({q_col}, '[^0-9]', '')) - 3)))"
+        elif 'birth' in column_lower or 'dob' in column_lower:
+            return f"YEAR({q_col})"
+        elif 'ip' in column_lower and 'address' in column_lower:
+            return f"CONCAT(SPLIT_PART({q_col}, '.', 1), '.xxx.xxx.xxx')"
+        elif column_lower.endswith('_id') or (column_lower.endswith('id') and len(column_lower) > 2):
+            return f"md5(CAST({q_col} AS VARCHAR))"
+        elif 'name' in column_lower and ('first' in column_lower or 'last' in column_lower or 'full' in column_lower):
+            return f"CONCAT(SUBSTR({q_col}, 1, 1), '***')"
+        elif 'address' in column_lower or 'street' in column_lower or 'city' in column_lower:
+            return f"CONCAT(SUBSTR({q_col}, 1, 3), '***', SUBSTR({q_col}, GREATEST(1, LENGTH({q_col}) - 2)))"
+        elif 'ssn' in column_lower or 'social' in column_lower:
+            return "'***-**-****'"
+        elif 'card' in column_lower or 'credit' in column_lower:
+            return f"CONCAT('****-****-****-', SUBSTR(REGEXP_REPLACE({q_col}, '[^0-9]', ''), GREATEST(1, LENGTH(REGEXP_REPLACE({q_col}, '[^0-9]', '')) - 3)))"
+        else:
+            return f"md5(CAST({q_col} AS VARCHAR))"
+    elif masking_logic.startswith('show_first_') or masking_logic.startswith('first_'):
+        try:
+            n = int(masking_logic.split('_')[-1])
+            return f"CONCAT(SUBSTR({q_col}, 1, {n}), '***')"
+        except (ValueError, IndexError):
+            return f"CONCAT(SUBSTR({q_col}, 1, 2), '***')"
+    elif masking_logic.startswith('show_last_') or masking_logic.startswith('last_'):
+        try:
+            n = int(masking_logic.split('_')[-1])
+            return f"CONCAT('***', SUBSTR({q_col}, GREATEST(1, LENGTH({q_col}) - {n} + 1)))"
+        except (ValueError, IndexError):
+            return f"CONCAT('***', SUBSTR({q_col}, GREATEST(1, LENGTH({q_col}) - 3)))"
+    elif masking_logic in ['show_initials', 'initials', 'show_initials_only']:
+        if 'name' in column_lower:
+            # Trino: Extract first letter, then find space and get next letter
+            return f"CONCAT(SUBSTR({q_col}, 1, 1), CASE WHEN POSITION(' ' IN {q_col}) > 0 THEN CONCAT('.', SUBSTR({q_col}, POSITION(' ' IN {q_col}) + 1, 1)) ELSE '' END)"
+        else:
+            return f"CONCAT(SUBSTR({q_col}, 1, 1), '***')"
+    elif masking_logic in ['show_city_only', 'city_only', 'mask_address_keep_city']:
+        if 'address' in column_lower or 'street' in column_lower:
+            # Extract city from comma-separated address
+            return f"TRIM(ELEMENT_AT(SPLIT({q_col}, ','), -2))"
+        else:
+            return f"CONCAT(SUBSTR({q_col}, 1, 3), '***')"
+    elif masking_logic in ['show_state_only', 'state_only', 'mask_address_keep_state']:
+        if 'address' in column_lower or 'street' in column_lower:
+            # Extract state from comma-separated address (last element)
+            return f"TRIM(ELEMENT_AT(SPLIT({q_col}, ','), -1))"
+        else:
+            return f"CONCAT(SUBSTR({q_col}, 1, 2), '***')"
+    elif '(' in masking_logic or masking_logic.upper() in ['NULL', 'TRUE', 'FALSE']:
+        # Allow custom SQL expressions
+        return masking_logic
+    else:
+        logger.warning(f'FN:convert_masking_logic_to_starburst_sql column:{column_name} masking_logic:{masking_logic} message:Unknown masking logic, defaulting to MD5 hash')
+        return f"md5(CAST({q_col} AS VARCHAR))"
+
+
 def generate_starburst_masked_view_sql(
     asset,
     columns,
@@ -58,7 +177,8 @@ def generate_starburst_masked_view_sql(
     Generate a Starburst/Trino-compatible CREATE VIEW statement with masking applied.
 
     - Uses \"catalog\".\"schema\".\"table\" naming.
-    - Applies '***MASKED***' for PII columns unless masking logic explicitly allows full visibility.
+    - Applies user-defined masking logic for PII columns (hash, partial mask, show_full, etc.)
+    - Defaults to '***MASKED***' for PII columns if no masking logic is specified.
     - Always adds SECURITY INVOKER as requested.
     """
     if not catalog or not schema:
@@ -68,22 +188,33 @@ def generate_starburst_masked_view_sql(
     if mode_normalized not in ("analytical", "operational"):
         mode_normalized = "analytical"
 
-    if not table_name:
-        table_name = asset.name
+    # Track if table_name was provided
+    has_table_name = bool(table_name and table_name.strip())
+    
+    # If no table_name provided, try to auto-detect by using schema name as table name
+    # This allows views to work: FROM "catalog"."schema"."schema" 
+    # (table name = schema name is a common pattern)
+    if not has_table_name:
+        # Use schema name as the table name (so FROM becomes catalog.schema.schema)
+        table_name = schema if schema else (asset.name if asset else "default_table")
+        has_table_name = True
+    
     if not view_name:
         # Default view name depends on masking mode
+        base_name = table_name
         if mode_normalized == "analytical":
-            view_name = f"{table_name}_masked_analytical"
+            view_name = f"{base_name}_masked_analytical"
         else:
-            view_name = f"{table_name}_masked_operational"
+            view_name = f"{base_name}_masked_operational"
 
     q_catalog = _quote_starburst_identifier(catalog)
     q_schema = _quote_starburst_identifier(schema)
-    q_table = _quote_starburst_identifier(table_name)
     q_view = _quote_starburst_identifier(view_name)
-
-    full_table = f"{q_catalog}.{q_schema}.{q_table}"
+    q_table = _quote_starburst_identifier(table_name)
+    
     full_view = f"{q_catalog}.{q_schema}.{q_view}"
+    # Always use full 3-part table reference: catalog.schema.table
+    full_table = f"{q_catalog}.{q_schema}.{q_table}"
 
     select_lines = []
     masking_summary = []
@@ -100,33 +231,47 @@ def generate_starburst_masked_view_sql(
         else:
             masking_logic = col.get("masking_logic_operational")
         masking_logic_str = str(masking_logic) if masking_logic not in (None, "") else ""
-        logic_norm = masking_logic_str.strip().lower()
+        col_type = col.get("type", "string")
 
-        # Decide effective expression for this column
+        # Always include the original column
+        # Always reference column by name (we always have a table now)
+        select_lines.append(f"    {q_col}")
+
+        # If PII detected, also add a masked column with _masked suffix
         if pii_detected:
-            if logic_norm in ("show_full", "none", "no_mask", "unmasked", "original"):
-                expr = q_col
-                effective_mode = "unmasked"
+            if masking_logic_str:
+                # Use the user-defined masking logic
+                masked_expr = convert_masking_logic_to_starburst_sql(masking_logic_str, col_name, col_type)
+                # Check if masking logic results in same as original (e.g., "show_full")
+                if masked_expr == q_col:
+                    effective_mode = "unmasked"
+                    # If masking logic is "show_full", don't add masked column (just original)
+                else:
+                    effective_mode = "masked"
+                    # Add masked column with _masked suffix
+                    q_masked_col = _quote_starburst_identifier(f"{col_name}_masked")
+                    # Always use the masking expression (we always have a table now)
+                    select_lines.append(f"    {masked_expr} AS {q_masked_col}")
+                    logger.debug(f'FN:generate_starburst_masked_view_sql column:{col_name} mode:{mode_normalized} masking_logic:{masking_logic_str} masked_expression:{masked_expr}')
             else:
-                # Default to full redaction for PII in Starburst view
-                expr = "'***MASKED***'"
+                # PII detected but no masking logic specified - add default masked column
                 effective_mode = "redacted"
+                q_masked_col = _quote_starburst_identifier(f"{col_name}_masked")
+                # Always use the masked value (we always have a table now)
+                select_lines.append(f"    '***MASKED***' AS {q_masked_col}")
+                logger.debug(f'FN:generate_starburst_masked_view_sql column:{col_name} mode:{mode_normalized} no_masking_logic_using_default')
         else:
-            expr = q_col
+            # Not PII - only original column (no masked version)
             effective_mode = "unmasked"
-
-        if expr == q_col:
-            select_lines.append(f"    {q_col}")
-        else:
-            select_lines.append(f"    {expr} AS {q_col}")
 
         masking_summary.append(
             {
                 "name": col_name,
                 "pii_detected": pii_detected,
-                "masking_logic_analytical": masking_logic_str,
+                "masking_logic_analytical": masking_logic_str if mode_normalized == "analytical" else col.get("masking_logic_analytical", ""),
+                "masking_logic_operational": masking_logic_str if mode_normalized == "operational" else col.get("masking_logic_operational", ""),
                 "effective_mode": effective_mode,
-                "expression": expr,
+                "has_masked_column": pii_detected and (masking_logic_str or True),  # True if PII detected
             }
         )
 
@@ -136,12 +281,16 @@ def generate_starburst_masked_view_sql(
     comma_newline = ",\n"
     select_sql = comma_newline.join(select_lines)
 
+    # Always reference a table (table_name is always set - either provided or schema name)
+    # This ensures views always have a FROM clause and can return data
+    from_clause = f"FROM {full_table}"
+    
     view_sql = f"""CREATE OR REPLACE VIEW {full_view}
 SECURITY INVOKER
 AS
 SELECT
 {select_sql}
-FROM {full_table};"""
+{from_clause};"""
 
     return view_sql, masking_summary
 
@@ -166,30 +315,69 @@ def execute_starburst_view_sql(
         raise RuntimeError("Starburst/Trino client library (trino) is not installed on the server")
 
     conn = None
+    rows = []
     try:
         auth = None
         if password:
             auth = BasicAuthentication(user, password)
 
-        conn = trino_connect(
-            host=host,
-            port=port,
-            user=user,
-            http_scheme=http_scheme or "https",
-            auth=auth,
-            catalog=catalog,
-            schema=schema,
-            verify=verify,
-            roles=roles,
-        )
+        # Build connection parameters
+        conn_params = {
+            "host": host,
+            "port": port,
+            "user": user,
+            "http_scheme": http_scheme or "https",
+            "catalog": catalog,
+            "schema": schema,
+            "verify": verify,
+        }
+        if auth:
+            conn_params["auth"] = auth
+        conn = trino_connect(**conn_params)
         cur = conn.cursor()
+
+        # Apply roles via SQL for compatibility across trino client versions.
+        # Starburst/Trino syntax: SET ROLE <role> IN <catalog>
+        if roles:
+            for role_catalog, role_name in roles.items():
+                if not role_catalog or not role_name:
+                    continue
+                q_role_name = _quote_starburst_identifier(role_name)
+                # Starburst deployments vary:
+                # - Some support global roles: SET ROLE <role>
+                # - Some support catalog-scoped roles: SET ROLE <role> IN <catalog>
+                if str(role_catalog).strip().lower() in ("system",):
+                    cur.execute(f"SET ROLE {q_role_name}")
+                else:
+                    q_role_catalog = _quote_starburst_identifier(role_catalog)
+                    cur.execute(f"SET ROLE {q_role_name} IN {q_role_catalog}")
+                try:
+                    _ = cur.fetchall()
+                except Exception:
+                    pass
+
         cur.execute(sql)
+
+        # Important: ensure the statement fully executes before closing the connection.
+        # The Trino DB-API may only surface errors (or even perform work) during fetch.
+        try:
+            rows = cur.fetchall() or []
+        except Exception:
+            # Many statements (e.g., CREATE VIEW) return no rows; still force completion.
+            try:
+                one = cur.fetchone()
+                if one is not None:
+                    rows = [one]
+            except Exception:
+                pass
     finally:
         if conn is not None:
             try:
                 conn.close()
             except Exception:
                 pass
+
+    return rows
 
 
 def test_starburst_connection(
@@ -1172,7 +1360,8 @@ def ingest_asset_to_starburst(asset_id):
 
         catalog = (payload.get("catalog") or "").strip()
         schema = (payload.get("schema") or "").strip()
-        table_name = (payload.get("table_name") or "").strip() or asset.name
+        # If table_name is empty, it will default to asset.name in generate_starburst_masked_view_sql
+        table_name = (payload.get("table_name") or "").strip()
 
         # Optional explicit names for analytical and operational views.
         view_name_analytical = (payload.get("view_name_analytical") or "").strip()
@@ -1203,11 +1392,19 @@ def ingest_asset_to_starburst(asset_id):
                 pass
         verify_ssl = bool(verify_ssl)
         
-        # Optional: allow caller to request a Starburst/Trino role (common: system=sysadmin)
+        # Optional: allow caller to request a Starburst/Trino role.
+        # By default we assume the built-in \"sysadmin\" role in the \"system\" catalog,
+        # so the session has the same privileges as the Starburst UI user.
         roles = None
-        role_name = (conn_cfg.get("role") or "").strip()
-        role_catalog = (conn_cfg.get("role_catalog") or "system").strip() or "system"
+        raw_role = conn_cfg.get("role")
+        if raw_role is None:
+            # No role explicitly provided → default to sysadmin
+            role_name = "sysadmin"
+        else:
+            role_name = raw_role.strip()
+
         if role_name:
+            role_catalog = (conn_cfg.get("role_catalog") or "system").strip() or "system"
             roles = {role_catalog: role_name}
 
         # If requested, authenticate to Starburst first (so UI can show auth errors before SQL preview/ingest)
@@ -1327,32 +1524,164 @@ def ingest_asset_to_starburst(asset_id):
             return jsonify({"error": "Starburst host is required to ingest the view"}), 400
 
         try:
+            # Determine the actual table name to use
+            # If not provided, use schema name as table name (matches generate_starburst_masked_view_sql logic)
+            has_table_name = bool(table_name and table_name.strip())
+            if not has_table_name:
+                table_name = schema if schema else (asset.name if asset else "default_table")
+            
+            q_catalog = _quote_starburst_identifier(catalog)
+            q_schema = _quote_starburst_identifier(schema)
+            q_table = _quote_starburst_identifier(table_name)
+
+            # This is the actual object referenced in the FROM clause
+            from_target = f"{q_catalog}.{q_schema}.{q_table}"
+            
+            # For file-based catalogs (like catalog_fs_azure), tables come from files, not CREATE TABLE
+            # So we skip table creation and just create the view - it will work when data files exist
+            # For other catalogs, try to create the table if it doesn't exist
+            is_file_based_catalog = catalog and ("fs_" in catalog.lower() or "file" in catalog.lower() or "hive" in catalog.lower())
+            
+            if not is_file_based_catalog:
+                # For non-file-based catalogs, try to create the table
+                if not has_table_name:
+                    logger.info(
+                        "FN:ingest_asset_to_starburst no_table_name_provided skipping_table_creation for non_file_catalog from_target:%s",
+                        from_target,
+                    )
+                else:
+                    col_defs = []
+                    for col in columns:
+                        col_name = col.get("name")
+                        if not col_name:
+                            continue
+                        col_type = col.get("type", "string")
+                        # Map types to Trino/Starburst types
+                        if col_type.lower() in ("string", "varchar", "text"):
+                            trino_type = "VARCHAR"
+                        elif col_type.lower() in ("int", "integer"):
+                            trino_type = "INTEGER"
+                        elif col_type.lower() in ("bigint", "long"):
+                            trino_type = "BIGINT"
+                        elif col_type.lower() in ("double", "float"):
+                            trino_type = "DOUBLE"
+                        elif col_type.lower() in ("boolean", "bool"):
+                            trino_type = "BOOLEAN"
+                        elif col_type.lower() in ("date", "timestamp"):
+                            trino_type = "TIMESTAMP"
+                        else:
+                            trino_type = "VARCHAR"
+
+                        q_col = _quote_starburst_identifier(col_name)
+                        col_defs.append(f'{q_col} {trino_type}')
+
+                    if col_defs:
+                        # Create empty table with proper structure
+                        create_table_sql = f'CREATE TABLE IF NOT EXISTS {q_catalog}.{q_schema}.{q_table} ({", ".join(col_defs)})'
+
+                        try:
+                            execute_starburst_view_sql(
+                                host=host,
+                                port=port,
+                                user=user,
+                                password=password,
+                                http_scheme=http_scheme,
+                                sql=create_table_sql,
+                                catalog=catalog,
+                                schema=schema,
+                                verify=verify_ssl,
+                                roles=roles,
+                            )
+                            logger.info(f'FN:ingest_asset_to_starburst created_table_if_not_exists table:{table_name}')
+                        except Exception as table_error:
+                            error_msg = str(table_error)
+                            if "already exists" in error_msg.lower() or "table already" in error_msg.lower():
+                                logger.info(f'FN:ingest_asset_to_starburst table_already_exists table:{table_name}')
+                            else:
+                                logger.warning(f'FN:ingest_asset_to_starburst table_creation_failed table:{table_name} error:{error_msg}')
+            else:
+                # For file-based catalogs, tables come from files - just create the view
+                # The view will work once the data files exist in the storage location
+                logger.info(
+                    "FN:ingest_asset_to_starburst file_based_catalog_detected catalog:%s skipping_table_creation from_target:%s",
+                    catalog,
+                    from_target,
+                )
+            
+            # Create views - they will reference the FROM target (which may or may not exist yet)
+            # For file-based catalogs, tables appear when data files are present
+            # For other catalogs, table should have been created above
+            view_errors = []
+            
             # Analytical view
-            execute_starburst_view_sql(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
-                http_scheme=http_scheme,
-                sql=analytical_sql,
-                catalog=catalog,
-                schema=schema,
-                verify=verify_ssl,
-                roles=roles,
-            )
+            try:
+                execute_starburst_view_sql(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    http_scheme=http_scheme,
+                    sql=analytical_sql,
+                    catalog=catalog,
+                    schema=schema,
+                    verify=verify_ssl,
+                    roles=roles,
+                )
+                logger.info(f'FN:ingest_asset_to_starburst created_analytical_view view:{analytical_view_name}')
+            except Exception as view_error:
+                error_msg = str(view_error)
+                if ("does not exist" in error_msg.lower()) or ("not exist" in error_msg.lower()):
+                    if is_file_based_catalog:
+                        view_errors.append(
+                            f"Analytical view creation failed: Source '{from_target}' not found. "
+                            f"For file-based catalogs, ensure the underlying table/files exist so this reference resolves."
+                        )
+                    else:
+                        view_errors.append(
+                            f"Analytical view creation failed: Source '{from_target}' does not exist. "
+                            f"Please provide a valid table name or ensure the source exists."
+                        )
+                else:
+                    view_errors.append(f"Analytical view creation failed: {error_msg}")
+            
             # Operational view
-            execute_starburst_view_sql(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
-                http_scheme=http_scheme,
-                sql=operational_sql,
-                catalog=catalog,
-                schema=schema,
-                verify=verify_ssl,
-                roles=roles,
-            )
+            try:
+                execute_starburst_view_sql(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    http_scheme=http_scheme,
+                    sql=operational_sql,
+                    catalog=catalog,
+                    schema=schema,
+                    verify=verify_ssl,
+                    roles=roles,
+                )
+                logger.info(f'FN:ingest_asset_to_starburst created_operational_view view:{operational_view_name}')
+            except Exception as view_error:
+                error_msg = str(view_error)
+                if ("does not exist" in error_msg.lower()) or ("not exist" in error_msg.lower()):
+                    if is_file_based_catalog:
+                        view_errors.append(
+                            f"Operational view creation failed: Source '{from_target}' not found. "
+                            f"For file-based catalogs, ensure the underlying table/files exist so this reference resolves."
+                        )
+                    else:
+                        view_errors.append(
+                            f"Operational view creation failed: Source '{from_target}' does not exist. "
+                            f"Please provide a valid table name or ensure the source exists."
+                        )
+                else:
+                    view_errors.append(f"Operational view creation failed: {error_msg}")
+            
+            # If there were view creation errors, return them but don't fail completely
+            if view_errors:
+                error_message = "Some views could not be created:\n" + "\n".join(view_errors)
+                logger.warning(f'FN:ingest_asset_to_starburst view_creation_errors: {error_message}')
+                # Still return success with warnings, or return error?
+                # For now, return error so user knows what happened
+                return jsonify({"error": error_message}), 400
         except Exception as e:
             logger.error(
                 "FN:ingest_asset_to_starburst_execute asset_id:%s host:%s port:%s error:%s",

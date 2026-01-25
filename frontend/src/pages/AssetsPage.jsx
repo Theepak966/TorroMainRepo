@@ -448,7 +448,7 @@ const AssetsPage = () => {
   }, [currentPage, pageSize, searchTerm, typeFilter, catalogFilter, approvalStatusFilter, applicationNameFilter]);
 
   const fetchAssets = async (pageOverride = null, returnFiltered = false) => {
-    setLoading(true);
+      setLoading(true);
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       
@@ -506,7 +506,7 @@ const AssetsPage = () => {
         if (returnFiltered) {
           return assetsList.length;
         }
-      } else {
+        } else {
         setAssets([]);
         setAllAssets([]);
         setTotalAssets(0);
@@ -1855,12 +1855,12 @@ const AssetsPage = () => {
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           <Tooltip title="Refresh the assets list to get the latest data from the database">
             <span>
-              <Button
-                variant="outlined"
-                startIcon={<Refresh />}
-                onClick={async () => {
-                  try {
-                    setLoading(true);
+          <Button
+            variant="outlined"
+            startIcon={<Refresh />}
+            onClick={async () => {
+              try {
+                setLoading(true);
                 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
                 
                 
@@ -2002,7 +2002,7 @@ const AssetsPage = () => {
                   const payload = await resp.json().catch(() => ({}));
                   if (!resp.ok) {
                     throw new Error(payload?.error || 'Failed to deduplicate discoveries');
-                  }
+                          }
                   
                   // Check if async (job_id present) or sync (immediate result)
                   if (payload.job_id) {
@@ -2015,20 +2015,20 @@ const AssetsPage = () => {
                     });
                     setDeduplicationProgressOpen(true);
                     pollDeduplicationStatus(payload.job_id);
-                  } else {
+                        } else {
                     // Sync mode: immediate result
                     const hidden = payload?.hidden ?? 0;
                     alert(`Deduplication complete. Hidden ${hidden} duplicate asset(s).`);
                     setCurrentPage(0);
                     await fetchAssets(0);
-                  }
-                } catch (error) {
+                }
+              } catch (error) {
                   console.error('Error deduplicating discoveries:', error);
                   alert(`Error: ${error?.message || 'Failed to deduplicate discoveries'}`);
-                } finally {
-                  setLoading(false);
-                }
-              }}
+              } finally {
+                setLoading(false);
+              }
+            }}
             >
               <Tooltip title="Hide duplicate assets with identical column schemas. Only the latest modified asset will remain visible." placement="right">
                 <span>Hide duplicates</span>
@@ -2377,10 +2377,10 @@ const AssetsPage = () => {
                               variant="contained"
                               size="small"
                               onClick={() => restoreHiddenDuplicate(row.discovery_id)}
-                              disabled={loading}
-                            >
+            disabled={loading}
+          >
                               Restore
-                            </Button>
+          </Button>
                           </span>
                         </Tooltip>
                       </TableCell>
@@ -2396,7 +2396,7 @@ const AssetsPage = () => {
             <Typography variant="body2" color="text.secondary">
               Showing {hiddenDuplicates.length > 0 ? ((hiddenDuplicatesPage - 1) * hiddenDuplicatesPerPage + 1) : 0} - {Math.min(hiddenDuplicatesPage * hiddenDuplicatesPerPage, hiddenDuplicatesTotal)} of {hiddenDuplicatesTotal}
             </Typography>
-          </Box>
+        </Box>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
             <Pagination
               count={hiddenDuplicatesTotalPages}
@@ -2408,7 +2408,7 @@ const AssetsPage = () => {
               showLastButton
             />
             <Button onClick={() => setHiddenDuplicatesOpen(false)}>Close</Button>
-          </Box>
+      </Box>
         </DialogActions>
       </Dialog>
 
@@ -2433,15 +2433,15 @@ const AssetsPage = () => {
             <Grid item xs={12} md={2}>
               <Tooltip title="Filter assets by data type (e.g., Table, View, File)">
                 <span>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={(e) => setTypeMenuAnchor(e.currentTarget)}
-                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-                  >
-                    {typeFilter.length === 0 ? 'All Types' : `${typeFilter.length} Selected`}
-                    <FilterList fontSize="small" />
-                  </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setTypeMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {typeFilter.length === 0 ? 'All Types' : `${typeFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
                 </span>
               </Tooltip>
               <Menu
@@ -2466,15 +2466,15 @@ const AssetsPage = () => {
             <Grid item xs={12} md={2.5}>
               <Tooltip title="Filter assets by catalog/database name">
                 <span>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={(e) => setCatalogMenuAnchor(e.currentTarget)}
-                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-                  >
-                    {catalogFilter.length === 0 ? 'All Catalogs' : `${catalogFilter.length} Selected`}
-                    <FilterList fontSize="small" />
-                  </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setCatalogMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {catalogFilter.length === 0 ? 'All Catalogs' : `${catalogFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
                 </span>
               </Tooltip>
               <Menu
@@ -2499,15 +2499,15 @@ const AssetsPage = () => {
             <Grid item xs={12} md={2}>
               <Tooltip title="Filter assets by approval status (Pending Review, Approved, Rejected)">
                 <span>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={(e) => setStatusMenuAnchor(e.currentTarget)}
-                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-                  >
-                    {approvalStatusFilter.length === 0 ? 'All Statuses' : `${approvalStatusFilter.length} Selected`}
-                    <FilterList fontSize="small" />
-                  </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setStatusMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {approvalStatusFilter.length === 0 ? 'All Statuses' : `${approvalStatusFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
                 </span>
               </Tooltip>
               <Menu
@@ -2538,15 +2538,15 @@ const AssetsPage = () => {
             <Grid item xs={12} md={2}>
               <Tooltip title="Filter assets by application name">
                 <span>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={(e) => setApplicationMenuAnchor(e.currentTarget)}
-                    sx={{ justifyContent: 'space-between', textTransform: 'none' }}
-                  >
-                    {applicationNameFilter.length === 0 ? 'All Applications' : `${applicationNameFilter.length} Selected`}
-                    <FilterList fontSize="small" />
-                  </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={(e) => setApplicationMenuAnchor(e.currentTarget)}
+                sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {applicationNameFilter.length === 0 ? 'All Applications' : `${applicationNameFilter.length} Selected`}
+                <FilterList fontSize="small" />
+              </Button>
                 </span>
               </Tooltip>
               <Menu
@@ -2571,21 +2571,21 @@ const AssetsPage = () => {
             <Grid item xs={12} md={1.5}>
               <Tooltip title="Clear all filters and search terms">
                 <span>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    startIcon={<FilterList />}
-                    onClick={() => {
-                      setSearchTerm('');
-                      setTypeFilter([]);
-                      setCatalogFilter([]);
-                      setApprovalStatusFilter([]);
-                      setApplicationNameFilter([]);
-                      setCurrentPage(0);
-                    }}
-                  >
-                    Clear
-                  </Button>
+              <Button
+                fullWidth
+                variant="outlined"
+                startIcon={<FilterList />}
+                onClick={() => {
+                  setSearchTerm('');
+                  setTypeFilter([]);
+                  setCatalogFilter([]);
+                  setApprovalStatusFilter([]);
+                  setApplicationNameFilter([]);
+                  setCurrentPage(0);
+                }}
+              >
+                Clear
+              </Button>
                 </span>
               </Tooltip>
             </Grid>
@@ -2712,14 +2712,14 @@ const AssetsPage = () => {
                         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                           <Tooltip title="View detailed information about this asset">
                             <span>
-                              <Button
-                                size="small"
-                                startIcon={<Visibility />}
-                                variant="outlined"
-                                onClick={() => handleViewAsset(asset.id)}
-                              >
-                                View
-                              </Button>
+                          <Button
+                            size="small"
+                            startIcon={<Visibility />}
+                            variant="outlined"
+                            onClick={() => handleViewAsset(asset.id)}
+                          >
+                            View
+                          </Button>
                             </span>
                           </Tooltip>
                           <Tooltip title="Ingest a masked analytical view for this asset into Starburst Enterprise">
@@ -2740,28 +2740,28 @@ const AssetsPage = () => {
                             <>
                               <Tooltip title="Approve this asset for use">
                                 <span>
-                                  <Button
-                                    size="small"
-                                    startIcon={<ThumbUp />}
-                                    variant="contained"
-                                    color="success"
-                                    onClick={() => handleApproveAsset(asset.id)}
-                                  >
-                                    Approve
-                                  </Button>
+                              <Button
+                                size="small"
+                                startIcon={<ThumbUp />}
+                                variant="contained"
+                                color="success"
+                                onClick={() => handleApproveAsset(asset.id)}
+                              >
+                                Approve
+                              </Button>
                                 </span>
                               </Tooltip>
                               <Tooltip title="Reject this asset and provide a reason">
                                 <span>
-                                  <Button
-                                    size="small"
-                                    startIcon={<ThumbDown />}
-                                    variant="contained"
-                                    color="error"
-                                    onClick={() => handleRejectClick(asset.id)}
-                                  >
-                                    Reject
-                                  </Button>
+                              <Button
+                                size="small"
+                                startIcon={<ThumbDown />}
+                                variant="contained"
+                                color="error"
+                                onClick={() => handleRejectClick(asset.id)}
+                              >
+                                Reject
+                              </Button>
                                 </span>
                               </Tooltip>
                             </>
@@ -2769,25 +2769,25 @@ const AssetsPage = () => {
                           {asset.operational_metadata?.approval_status === 'approved' && (
                             <>
                             <Tooltip title="This asset has been approved for use">
-                              <Chip
-                                icon={<CheckCircle />}
-                                label="Approved"
-                                color="success"
-                                size="small"
-                              />
+                            <Chip
+                              icon={<CheckCircle />}
+                              label="Approved"
+                              color="success"
+                              size="small"
+                            />
                             </Tooltip>
                               <Tooltip title={asset.operational_metadata?.publish_status === 'published' ? 'Republish this asset to update its published version' : 'Publish this approved asset'}>
                                 <span>
-                                  <Button
-                                    size="small"
-                                    startIcon={<Publish />}
-                                    variant="contained"
-                                    color="primary"
-                                    onClick={() => handlePublishAsset(asset.id)}
+                                <Button
+                                  size="small"
+                                  startIcon={<Publish />}
+                                  variant="contained"
+                                  color="primary"
+                                  onClick={() => handlePublishAsset(asset.id)}
                                     disabled={publishing}
-                                  >
+                                >
                                     {asset.operational_metadata?.publish_status === 'published' ? 'Republish' : 'Publish'}
-                                  </Button>
+                                </Button>
                                 </span>
                               </Tooltip>
                             </>
@@ -2795,12 +2795,12 @@ const AssetsPage = () => {
                           {asset.operational_metadata?.approval_status === 'rejected' && (
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                               <Tooltip title="This asset has been rejected. See reason below.">
-                                <Chip
-                                  icon={<Close />}
-                                  label="Rejected"
-                                  color="error"
-                                  size="small"
-                                />
+                              <Chip
+                                icon={<Close />}
+                                label="Rejected"
+                                color="error"
+                                size="small"
+                              />
                               </Tooltip>
                               {asset.operational_metadata?.rejection_reason && (
                                 <Typography variant="caption" color="error" sx={{ fontSize: '0.7rem', fontStyle: 'italic', maxWidth: '250px', wordWrap: 'break-word' }}>
@@ -2936,63 +2936,63 @@ const AssetsPage = () => {
                       return (
                         <Grid container spacing={2}>
                           {metadataVisibility.technical['Asset ID'] && (
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Asset ID
-                                  </Typography>
-                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
-                                    {safeAssetId}
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
+                          <Grid item xs={6}>
+                            <Card variant="outlined">
+                              <CardContent>
+                                <Typography color="text.secondary" gutterBottom>
+                                  Asset ID
+                                </Typography>
+                                <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
+                                  {safeAssetId}
+                                </Typography>
+                              </CardContent>
+                            </Card>
+                          </Grid>
                           )}
                           
                           {metadataVisibility.technical['Database Type'] && (
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Database Type
-                                  </Typography>
-                                  <Typography variant="body1">
-                                    Oracle Database
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
+                          <Grid item xs={6}>
+                            <Card variant="outlined">
+                              <CardContent>
+                                <Typography color="text.secondary" gutterBottom>
+                                  Database Type
+                                </Typography>
+                                <Typography variant="body1">
+                                  Oracle Database
+                                </Typography>
+                              </CardContent>
+                            </Card>
+                          </Grid>
                           )}
                           
                           {metadataVisibility.technical['Schema'] && (
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Schema
-                                  </Typography>
-                                  <Typography variant="body1">
-                                    {schema}
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
+                          <Grid item xs={6}>
+                            <Card variant="outlined">
+                              <CardContent>
+                                <Typography color="text.secondary" gutterBottom>
+                                  Schema
+                                </Typography>
+                                <Typography variant="body1">
+                                  {schema}
+                                </Typography>
+                              </CardContent>
+                            </Card>
+                          </Grid>
                           )}
                           
                           {metadataVisibility.technical['Object Type'] && (
-                            <Grid item xs={6}>
-                              <Card variant="outlined">
-                                <CardContent>
-                                  <Typography color="text.secondary" gutterBottom>
-                                    Object Type
-                                  </Typography>
-                                  <Typography variant="body1">
-                                    {assetType.charAt(0).toUpperCase() + assetType.slice(1).replace('_', ' ')}
-                                  </Typography>
-                                </CardContent>
-                              </Card>
-                            </Grid>
+                          <Grid item xs={6}>
+                            <Card variant="outlined">
+                              <CardContent>
+                                <Typography color="text.secondary" gutterBottom>
+                                  Object Type
+                                </Typography>
+                                <Typography variant="body1">
+                                  {assetType.charAt(0).toUpperCase() + assetType.slice(1).replace('_', ' ')}
+                                </Typography>
+                              </CardContent>
+                            </Card>
+                          </Grid>
                           )}
                           
                           {(tableName !== 'N/A' || viewName !== 'N/A' || procedureName !== 'N/A' || functionName !== 'N/A' || mviewName) && 
@@ -3273,146 +3273,146 @@ const AssetsPage = () => {
                     return (
                       <Grid container spacing={2}>
                         {metadataVisibility.technical['Asset ID'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Asset ID
-                                </Typography>
-                                <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
-                                  {safeAssetId}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Asset ID
+                              </Typography>
+                              <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
+                                {safeAssetId}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         
                         {metadataVisibility.technical['Last Modified'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Last Modified
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(safeLastModified).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Last Modified
+                              </Typography>
+                              <Typography variant="body1">
+                                {new Date(safeLastModified).toLocaleString()}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['Creation Time'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Creation Time
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(safeCreatedAt).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Creation Time
+                              </Typography>
+                              <Typography variant="body1">
+                                {new Date(safeCreatedAt).toLocaleString()}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['Type'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Type
-                                </Typography>
-                                <Typography variant="body1">
-                                  {storageType}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Type
+                              </Typography>
+                              <Typography variant="body1">
+                                {storageType}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['Size'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Size
-                                </Typography>
-                                <Typography variant="body1">
-                                  {formatBytes(safeSizeBytes)}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Size
+                              </Typography>
+                              <Typography variant="body1">
+                                {formatBytes(safeSizeBytes)}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['Format'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Format
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeFormat}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Format
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeFormat}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['Access Tier'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Access Tier
-                                </Typography>
-                                <Typography variant="body1">
-                                  {accessTier}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Access Tier
+                              </Typography>
+                              <Typography variant="body1">
+                                {accessTier}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['ETAG'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  ETAG
-                                </Typography>
-                                <Typography variant="body1" sx={{ fontSize: '0.875rem', wordBreak: 'break-all' }}>
-                                  {etag}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                ETAG
+                              </Typography>
+                              <Typography variant="body1" sx={{ fontSize: '0.875rem', wordBreak: 'break-all' }}>
+                                {etag}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.technical['Content Type'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Content Type
-                                </Typography>
-                                <Typography variant="body1" sx={{ fontSize: '0.875rem' }}>
-                                  {contentType}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Content Type
+                              </Typography>
+                              <Typography variant="body1" sx={{ fontSize: '0.875rem' }}>
+                                {contentType}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         
                         {metadataVisibility.technical['Location'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Location
-                                </Typography>
-                                <Typography variant="body1" sx={{ fontSize: '0.875rem' }}>
-                                  {safeLocation}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Location
+                              </Typography>
+                              <Typography variant="body1" sx={{ fontSize: '0.875rem' }}>
+                                {safeLocation}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {/* Application Name removed from technical metadata - now shown in main table from connection config */}
                         {safeNumRows > 0 && metadataVisibility.technical['Number of Rows'] && (
@@ -3473,8 +3473,8 @@ const AssetsPage = () => {
                       const safeDiscoveryId = selectedAsset?.discovery_id || operationalMetadata.discovery_id || 'N/A';
                       const safeApplicationName = selectedAsset?.application_name || selectedAsset?.business_metadata?.application_name || operationalMetadata.application_name || 'N/A';
                       
-                    return (
-                      <Grid container spacing={2}>
+                      return (
+                        <Grid container spacing={2}>
                         {metadataVisibility.operational['Object Status'] && (
                           <Grid item xs={6}>
                             <Card variant="outlined">
@@ -3506,33 +3506,33 @@ const AssetsPage = () => {
                           </Grid>
                         )}
                         {safeLastAnalyzed && metadataVisibility.operational['Last Analyzed'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Last Analyzed
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(safeLastAnalyzed).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        )}
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>
+                                    Last Analyzed
+                                  </Typography>
+                                  <Typography variant="body1">
+                                    {new Date(safeLastAnalyzed).toLocaleString()}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
                         {safeLastRefresh && metadataVisibility.operational['Last Refresh Date'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Last Refresh Date
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(safeLastRefresh).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        )}
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>
+                                    Last Refresh Date
+                                  </Typography>
+                                  <Typography variant="body1">
+                                    {new Date(safeLastRefresh).toLocaleString()}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
                         {metadataVisibility.operational['Connector ID'] && (
                           <Grid item xs={6}>
                             <Card variant="outlined">
@@ -3548,19 +3548,19 @@ const AssetsPage = () => {
                           </Grid>
                         )}
                         {selectedAsset?.discovered_at && metadataVisibility.operational['Discovered At'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Discovered At
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(selectedAsset.discovered_at).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        )}
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>
+                                    Discovered At
+                                  </Typography>
+                                  <Typography variant="body1">
+                                    {new Date(selectedAsset.discovered_at).toLocaleString()}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
                         {safeDiscoveryId !== 'N/A' && metadataVisibility.operational['Discovery ID'] && (
                           <Grid item xs={6}>
                             <Card variant="outlined">
@@ -3589,8 +3589,8 @@ const AssetsPage = () => {
                             </Card>
                           </Grid>
                         )}
-                      </Grid>
-                    );
+                        </Grid>
+                      );
                     }
                     
                     // Azure Blob Storage operational metadata (existing code)
@@ -3637,118 +3637,118 @@ const AssetsPage = () => {
                     return (
                       <Grid container spacing={2}>
                         {metadataVisibility.operational['Status'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Status
-                                </Typography>
-                                <Chip 
-                                  label={safeStatus} 
-                                  color="success" 
-                                  size="small"
-                                />
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Status
+                              </Typography>
+                              <Chip 
+                                label={safeStatus} 
+                                color="success" 
+                                size="small"
+                              />
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Owner'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Owner
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeOwner}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Owner
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeOwner}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Last Modified'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Last Modified
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(safeLastModified).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Last Modified
+                              </Typography>
+                              <Typography variant="body1">
+                                {new Date(safeLastModified).toLocaleString()}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Last Accessed'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Last Accessed
-                                </Typography>
-                                <Typography variant="body1">
-                                  {new Date(safeLastAccessed).toLocaleString()}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Last Accessed
+                              </Typography>
+                              <Typography variant="body1">
+                                {new Date(safeLastAccessed).toLocaleString()}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Access Count'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Access Count
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeAccessCount}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Access Count
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeAccessCount}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Data Source Type'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Data Source Type
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeDataSourceType}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Data Source Type
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeDataSourceType}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Connector ID'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Connector ID
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeConnectorId}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Connector ID
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeConnectorId}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.operational['Catalog'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Catalog
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeCatalog}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Catalog
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeCatalog}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {selectedAsset?.discovered_at && metadataVisibility.operational['Discovered At'] && (
                           <Grid item xs={6}>
@@ -3831,145 +3831,145 @@ const AssetsPage = () => {
                     return (
                       <Grid container spacing={2}>
                         {metadataVisibility.business['Description'] && (
-                          <Grid item xs={12}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom sx={{ mb: 1 }}>
-                                  Description
-                                </Typography>
-                                <TextField
-                                  fullWidth
-                                  multiline
-                                  rows={3}
-                                  value={description || defaultDescription}
-                                  InputProps={{
-                                    readOnly: true,
-                                  }}
-                                  placeholder="Azure Blob Storage file: schema_20_file_099.parquet"
-                                  variant="outlined"
-                                  size="small"
-                                  sx={{
-                                    '& .MuiInputBase-input': {
-                                      cursor: 'default',
-                                    }
-                                  }}
-                                />
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={12}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom sx={{ mb: 1 }}>
+                                Description
+                              </Typography>
+                              <TextField
+                                fullWidth
+                                multiline
+                                rows={3}
+                                value={description || defaultDescription}
+                                InputProps={{
+                                  readOnly: true,
+                                }}
+                                placeholder="Azure Blob Storage file: schema_20_file_099.parquet"
+                                variant="outlined"
+                                size="small"
+                                sx={{
+                                  '& .MuiInputBase-input': {
+                                    cursor: 'default',
+                                  }
+                                }}
+                              />
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.business['Business Owner'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Business Owner
-                                </Typography>
-                                <Typography variant="body1">
-                                  {safeBusinessOwner}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Business Owner
+                              </Typography>
+                              <Typography variant="body1">
+                                {safeBusinessOwner}
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.business['Department'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Department
-                                </Typography>
-                                <FormControl fullWidth size="small" sx={{ mt: 1 }}>
-                                  <Select
-                                    value={department}
-                                    onChange={(e) => setDepartment(e.target.value)}
-                                    displayEmpty
-                                  >
-                                    {DEPARTMENTS.map((dept) => (
-                                      <MenuItem key={dept} value={dept}>
-                                        {dept}
-                                      </MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Department
+                              </Typography>
+                              <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                                <Select
+                                  value={department}
+                                  onChange={(e) => setDepartment(e.target.value)}
+                                  displayEmpty
+                                >
+                                  {DEPARTMENTS.map((dept) => (
+                                    <MenuItem key={dept} value={dept}>
+                                      {dept}
+                                    </MenuItem>
+                                  ))}
+                                </Select>
+                              </FormControl>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.business['Classification'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Classification
-                                </Typography>
-                                <FormControl fullWidth size="small" sx={{ mt: 1 }}>
-                                  <Select
-                                    value={classification}
-                                    onChange={(e) => setClassification(e.target.value)}
-                                    displayEmpty
-                                  >
-                                    <MenuItem value="public">Public</MenuItem>
-                                    <MenuItem value="internal">Internal</MenuItem>
-                                    <MenuItem value="confidential">Confidential</MenuItem>
-                                    <MenuItem value="restricted">Restricted</MenuItem>
-                                    <MenuItem value="top_secret">Top Secret</MenuItem>
-                                  </Select>
-                                </FormControl>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Classification
+                              </Typography>
+                              <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                                <Select
+                                  value={classification}
+                                  onChange={(e) => setClassification(e.target.value)}
+                                  displayEmpty
+                                >
+                                  <MenuItem value="public">Public</MenuItem>
+                                  <MenuItem value="internal">Internal</MenuItem>
+                                  <MenuItem value="confidential">Confidential</MenuItem>
+                                  <MenuItem value="restricted">Restricted</MenuItem>
+                                  <MenuItem value="top_secret">Top Secret</MenuItem>
+                                </Select>
+                              </FormControl>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.business['Sensitivity Level'] && (
-                          <Grid item xs={6}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom>
-                                  Sensitivity Level
-                                </Typography>
-                                <FormControl fullWidth size="small" sx={{ mt: 1 }}>
-                                  <Select
-                                    value={sensitivityLevel}
-                                    onChange={(e) => setSensitivityLevel(e.target.value)}
-                                    displayEmpty
-                                  >
-                                    <MenuItem value="low">Low</MenuItem>
-                                    <MenuItem value="medium">Medium</MenuItem>
-                                    <MenuItem value="high">High</MenuItem>
-                                    <MenuItem value="critical">Critical</MenuItem>
-                                  </Select>
-                                </FormControl>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={6}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom>
+                                Sensitivity Level
+                              </Typography>
+                              <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                                <Select
+                                  value={sensitivityLevel}
+                                  onChange={(e) => setSensitivityLevel(e.target.value)}
+                                  displayEmpty
+                                >
+                                  <MenuItem value="low">Low</MenuItem>
+                                  <MenuItem value="medium">Medium</MenuItem>
+                                  <MenuItem value="high">High</MenuItem>
+                                  <MenuItem value="critical">Critical</MenuItem>
+                                </Select>
+                              </FormControl>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         {metadataVisibility.business['Tags'] && (
-                          <Grid item xs={12}>
-                            <Card variant="outlined">
-                              <CardContent>
-                                <Typography color="text.secondary" gutterBottom sx={{ fontWeight: 600 }}>
-                                  Table Tags
-                                </Typography>
-                                <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                                  {filteredTags.length > 0 ? (
-                                    filteredTags.map((tag, index) => (
-                                      <Chip
-                                        key={index}
-                                        label={tag}
-                                        size="small"
-                                        color={tag.startsWith('REJECTED:') ? 'error' : 'default'}
-                                        variant={tag.startsWith('REJECTED:') ? 'filled' : 'outlined'}
-                                      />
-                                    ))
-                                  ) : (
-                                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                                      No table tags
-                                    </Typography>
-                                  )}
-                                </Box>
-                              </CardContent>
-                            </Card>
-                          </Grid>
+                        <Grid item xs={12}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Typography color="text.secondary" gutterBottom sx={{ fontWeight: 600 }}>
+                                Table Tags
+                              </Typography>
+                              <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                                {filteredTags.length > 0 ? (
+                                  filteredTags.map((tag, index) => (
+                                    <Chip
+                                      key={index}
+                                      label={tag}
+                                      size="small"
+                                      color={tag.startsWith('REJECTED:') ? 'error' : 'default'}
+                                      variant={tag.startsWith('REJECTED:') ? 'filled' : 'outlined'}
+                                    />
+                                  ))
+                                ) : (
+                                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                    No table tags
+                                  </Typography>
+                                )}
+                              </Box>
+                            </CardContent>
+                          </Card>
+                        </Grid>
                         )}
                         <Grid item xs={12}>
                           <Card variant="outlined">
@@ -3996,8 +3996,8 @@ const AssetsPage = () => {
                 <Box>
                   <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
                     <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                      Columns & PII Detection
-                    </Typography>
+                    Columns & PII Detection
+                  </Typography>
                     <Box display="flex" gap={1} alignItems="center">
                       {showColumnCheckboxes && (
                         <Tooltip title={`Export ${selectedColumns.length} selected column(s) to CSV`}>
@@ -4314,32 +4314,32 @@ const AssetsPage = () => {
                                               whiteSpace: 'nowrap'
                                             }}
                                           >
-                                            {column.description || 'No description'}
-                                          </Typography>
+                                          {column.description || 'No description'}
+                                        </Typography>
                                         </Tooltip>
                                       </TableCell>
                                       <TableCell>
                                         {column.pii_detected ? (
                                           <Tooltip title={`Click to edit PII status and masking logic. Detected types: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`}>
-                                            <Chip 
-                                              icon={<Warning />}
-                                              label={`PII: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`} 
-                                              color="error" 
-                                              size="small"
-                                              sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
-                                              onClick={() => handleOpenPiiDialog(column)}
-                                            />
+                                          <Chip 
+                                            icon={<Warning />}
+                                            label={`PII: ${(column.pii_types && column.pii_types.length > 0) ? column.pii_types.join(', ') : 'Unknown'}`} 
+                                            color="error" 
+                                            size="small"
+                                            sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
+                                            onClick={() => handleOpenPiiDialog(column)}
+                                          />
                                           </Tooltip>
                                         ) : (
                                           <Tooltip title="Click to mark this column as containing PII data">
-                                            <Chip 
-                                              icon={<CheckCircle />}
-                                              label="No PII" 
-                                              color="success" 
-                                              size="small"
-                                              sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
-                                              onClick={() => handleOpenPiiDialog(column)}
-                                            />
+                                          <Chip 
+                                            icon={<CheckCircle />}
+                                            label="No PII" 
+                                            color="success" 
+                                            size="small"
+                                            sx={{ cursor: 'pointer', '&:hover': { opacity: 0.8 } }}
+                                            onClick={() => handleOpenPiiDialog(column)}
+                                          />
                                           </Tooltip>
                                         )}
                                       </TableCell>
