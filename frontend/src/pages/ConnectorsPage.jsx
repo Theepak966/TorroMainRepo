@@ -315,6 +315,15 @@ const ConnectorsPage = () => {
       color: '#F80000',
       connectionTypes: ['Standard Connection', 'JDBC'],
     },
+    {
+      id: 'aws_s3',
+      name: 'AWS S3',
+      description: 'Connect to Amazon S3 buckets and discover objects',
+      logo: 'https://a0.awsstatic.com/libra-css/images/site/touch-icon-ipad-144-smile.png',
+      fallbackIcon: <Storage />,
+      color: '#FF9900',
+      connectionTypes: ['Access Key'],
+    },
   ];
 
   const wizardSteps = [
@@ -1060,6 +1069,231 @@ const ConnectorsPage = () => {
         });
         setTesting(false);
       }
+    } else if (selectedConnector?.id === 'aws_s3') {
+      if (!config.name) {
+        setTestResult({ success: false, message: 'Please provide connection name' });
+        return;
+      }
+      setTesting(true);
+      setTestResult(null);
+      setDiscoveryProgress([]);
+      try {
+        const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+        const finalConfig = {
+          ...config,
+          name: config.name,
+          application_name: config.application_name || config.name,
+          aws_access_key_id: config.aws_access_key_id,
+          aws_secret_access_key: config.aws_secret_access_key,
+          region_name: config.region_name || 'us-east-1',
+          folder_path: config.folder_path || '',
+        };
+        setDiscoveryProgress(prev => [...prev, 'Testing AWS S3 connection...']);
+        const testResponse = await fetch(`${API_BASE_URL}/api/connections/test-config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config: finalConfig, connector_type: 'aws_s3' }),
+        });
+        if (!testResponse.ok) {
+          const ct = testResponse.headers.get('content-type');
+          let errMsg = `Server returned ${testResponse.status} ${testResponse.statusText}`;
+          if (ct && ct.includes('application/json')) {
+            try {
+              const ed = await testResponse.json();
+              errMsg = ed.error || ed.message || errMsg;
+            } catch (e) {}
+          }
+          setTestResult({ success: false, message: errMsg });
+          setTesting(false);
+          return;
+        }
+        const testData = await testResponse.json();
+        if (!testData.success) {
+          setTestResult({ success: false, message: testData.message || 'Connection test failed' });
+          setTesting(false);
+          return;
+        }
+        setDiscoveryProgress(prev => [...prev, 'Connection test successful']);
+        let connection = null;
+        const existingRes = await fetch(`${API_BASE_URL}/api/connections`);
+        if (existingRes.ok) {
+          const existing = await existingRes.json();
+          connection = existing.find(c => c.name === finalConfig.name && c.connector_type === 'aws_s3');
+        }
+        if (connection) {
+          setDiscoveryProgress(prev => [...prev, 'Updating existing connection...']);
+          const updateRes = await fetch(`${API_BASE_URL}/api/connections/${connection.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ connection_type: connectionType, config: finalConfig, status: 'active' }),
+          });
+          if (!updateRes.ok) {
+            const ed = await updateRes.json();
+            throw new Error(ed.error || 'Failed to update connection');
+          }
+          connection = await updateRes.json();
+          setDiscoveryProgress(prev => [...prev, 'Connection updated successfully']);
+        } else {
+          setDiscoveryProgress(prev => [...prev, 'Saving connection...']);
+          const createRes = await fetch(`${API_BASE_URL}/api/connections`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: finalConfig.name,
+              connector_type: 'aws_s3',
+              connection_type: connectionType,
+              config: finalConfig,
+              status: 'active',
+            }),
+          });
+          if (!createRes.ok) {
+            const ed = await createRes.json();
+            throw new Error(ed.error || 'Failed to create connection');
+          }
+          connection = await createRes.json();
+          setDiscoveryProgress(prev => [...prev, 'Connection saved successfully']);
+        }
+        setDiscoveryProgress(prev => [...prev, 'Fetching buckets...']);
+        const containersRes = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/containers`);
+        const containersData = await containersRes.json();
+        const bucketNames = (containersData.containers || []).map(c => c.name);
+        if (bucketNames.length > 0) {
+          setConfig(prev => ({ ...prev, containers: bucketNames }));
+          setDiscoveryProgress(prev => [...prev, 'Starting S3 discovery stream...']);
+          try {
+            const streamRes = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover-stream`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                containers: bucketNames,
+                folder_path: finalConfig.folder_path || '',
+              }),
+            });
+            if (!streamRes.ok) throw new Error(`HTTP ${streamRes.status}: ${streamRes.statusText}`);
+            const reader = streamRes.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let totalDiscovered = 0;
+            let totalUpdated = 0;
+            let totalSkipped = 0;
+            const actualContainersProcessed = new Set();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.type === 'progress') setDiscoveryProgress(prev => [...prev, data.message]);
+                  else if (data.type === 'container') {
+                    actualContainersProcessed.add(data.container);
+                    setDiscoveryProgress(prev => [...prev, `[CONTAINER] ${data.container}`]);
+                  } else if (data.type === 'file') {
+                    const disp = data.full_path || data.file;
+                    const show = !data.total || data.total < 100 || data.index <= 20 || data.index % 50 === 0;
+                    if (show) setDiscoveryProgress(prev => [...prev, `  [FILE] ${disp} (${data.index}/${data.total})`]);
+                  } else if (data.type === 'complete') {
+                    totalDiscovered = data.discovered || 0;
+                    totalUpdated = data.updated || 0;
+                    totalSkipped = data.skipped || 0;
+                    setDiscoveryProgress(prev => [...prev, `Discovery complete! Found ${totalDiscovered} objects. Saving assets to database...`]);
+                    startSaveProgressPolling(connection.id);
+                    const discoverRes = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        containers: bucketNames,
+                        folder_path: finalConfig.folder_path || '',
+                        skip_deduplication: true,
+                      }),
+                    });
+                    if (!discoverRes.ok) {
+                      const err = await discoverRes.json();
+                      throw new Error(err.error || `HTTP ${discoverRes.status}`);
+                    }
+                    const discoverResult = await discoverRes.json();
+                    stopSaveProgressPolling(true);
+                    const saved = discoverResult.created_count || discoverResult.discovered_count || 0;
+                    const updated = discoverResult.updated_count || 0;
+                    const skipped = discoverResult.skipped_count || 0;
+                    const total = saved + updated;
+                    if (total > 0) {
+                      setDiscoveryProgress(prev => [...prev, `Saved ${total} assets (${saved} new, ${updated} updated, ${skipped} skipped)`]);
+                    } else if (skipped > 0) {
+                      setDiscoveryProgress(prev => [...prev, `All ${skipped} assets already exist (no new assets)`]);
+                    } else {
+                      setDiscoveryProgress(prev => [...prev, 'No new assets to save']);
+                    }
+                    const n = actualContainersProcessed.size || 1;
+                    setTestResult({
+                      success: true,
+                      message: total > 0
+                        ? `Connection successful! Discovered ${total} assets in ${n} bucket(s)`
+                        : skipped > 0
+                          ? `Connection successful! All ${skipped} assets already exist (no new assets)`
+                          : 'Connection successful! No assets found',
+                      discoveredAssets: total,
+                      totalContainers: n,
+                      connectionId: connection.id,
+                      containers: containersData.containers || [],
+                    });
+                    setTesting(false);
+                    return;
+                  } else if (data.type === 'error') {
+                    setDiscoveryProgress(prev => [...prev, `Error: ${data.message}`]);
+                    setTestResult({
+                      success: false,
+                      message: `Discovery error: ${data.message}`,
+                      connectionId: connection.id,
+                    });
+                    setTesting(false);
+                    return;
+                  }
+                } catch (e) { /* ignore parse */ }
+              }
+            }
+            startSaveProgressPolling(connection.id);
+            setTestResult({
+              success: true,
+              message: `Connection successful! Found ${bucketNames.length} bucket(s).`,
+              discoveredAssets: 0,
+              totalContainers: bucketNames.length,
+              connectionId: connection.id,
+              containers: containersData.containers || [],
+            });
+            setTesting(false);
+          } catch (streamErr) {
+            const msg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+            setDiscoveryProgress(prev => [...prev, `Discovery error: ${msg}`]);
+            setTestResult({
+              success: true,
+              message: `Connection successful! Found ${bucketNames.length} bucket(s). Discovery error: ${msg}`,
+              discoveredAssets: 0,
+              totalContainers: bucketNames.length,
+              connectionId: connection.id,
+              containers: containersData.containers || [],
+            });
+            setTesting(false);
+          }
+        } else {
+          setTestResult({
+            success: true,
+            message: `Connection successful! No buckets found.`,
+            discoveredAssets: 0,
+            totalContainers: 0,
+            connectionId: connection.id,
+            containers: [],
+          });
+          setTesting(false);
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        setTestResult({ success: false, message: msg });
+        setTesting(false);
+      }
     } else {
       setTestResult({ 
         success: false, 
@@ -1109,6 +1343,14 @@ const ConnectorsPage = () => {
                       username: '',
                       password: '',
                       schema_filter: '',
+                    });
+                  } else if (selectedType === 'Access Key' && selectedConnector?.id === 'aws_s3') {
+                    setConfig({
+                      ...config,
+                      aws_access_key_id: '',
+                      aws_secret_access_key: '',
+                      region_name: 'us-east-1',
+                      folder_path: '',
                     });
                   } else {
                     // Connection String type - clear config
@@ -1367,6 +1609,51 @@ const ConnectorsPage = () => {
                       value={config.schema_filter || ''}
                       onChange={(e) => setConfig({...config, schema_filter: e.target.value})}
                       helperText="Optional: Comma-separated list of schemas to scan (leave empty for all)"
+                    />
+                  </Grid>
+                </>
+              )}
+              {connectionType === 'Access Key' && selectedConnector?.id === 'aws_s3' && (
+                <>
+                  <Grid item xs={12}>
+                    <TextField
+                      fullWidth
+                      required
+                      label="Access Key ID"
+                      value={config.aws_access_key_id || ''}
+                      onChange={(e) => setConfig({...config, aws_access_key_id: e.target.value})}
+                      helperText="AWS IAM access key ID"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <TextField
+                      fullWidth
+                      required
+                      label="Secret Access Key"
+                      type="password"
+                      value={config.aws_secret_access_key || ''}
+                      onChange={(e) => setConfig({...config, aws_secret_access_key: e.target.value})}
+                      helperText="AWS IAM secret access key"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <TextField
+                      fullWidth
+                      required
+                      label="Region"
+                      value={config.region_name || 'us-east-1'}
+                      onChange={(e) => setConfig({...config, region_name: e.target.value})}
+                      helperText="AWS region (e.g. us-east-1, eu-west-1)"
+                      placeholder="us-east-1"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <TextField
+                      fullWidth
+                      label="Prefix / Folder path (optional)"
+                      value={config.folder_path || ''}
+                      onChange={(e) => setConfig({...config, folder_path: e.target.value})}
+                      helperText="Optional: S3 key prefix to limit discovery (leave empty for entire bucket)"
                     />
                   </Grid>
                 </>
@@ -1945,7 +2232,8 @@ const ConnectorsPage = () => {
                       (connectionType === 'Connection String' && selectedConnector?.id === 'azure_blob' && !config.connection_string) ||
                       (connectionType === 'Service Principal' && selectedConnector?.id === 'azure_blob' && !config.name) ||
                       (connectionType === 'Standard Connection' && selectedConnector?.id === 'oracle_db' && (!config.host || !config.service_name || !config.username || !config.password)) ||
-                      (connectionType === 'JDBC' && selectedConnector?.id === 'oracle_db' && (!config.jdbc_url || !config.username || !config.password))
+                      (connectionType === 'JDBC' && selectedConnector?.id === 'oracle_db' && (!config.jdbc_url || !config.username || !config.password)) ||
+                      (connectionType === 'Access Key' && selectedConnector?.id === 'aws_s3' && (!config.aws_access_key_id || !config.aws_secret_access_key || !config.region_name))
                     )) ||
                     (activeStep === 2 && !testResult)
                   }

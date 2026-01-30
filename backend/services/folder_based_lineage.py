@@ -63,15 +63,20 @@ class FolderBasedLineageService:
             folder_path = discovery.folder_path.strip('/')
             folder_parts = folder_path.split('/') if folder_path else []
             
-            # Get container from storage_location
+            # Get container from storage_location (Azure: container, S3: bucket)
             container_name = None
+            container_from_bucket = False
             if discovery.storage_location and isinstance(discovery.storage_location, dict):
-                container_info = discovery.storage_location.get('container', {})
+                sl = discovery.storage_location
+                container_info = sl.get('container', {})
                 if isinstance(container_info, dict):
                     container_name = container_info.get('name')
                 elif isinstance(container_info, str):
                     container_name = container_info
-            
+                if not container_name and sl.get('type') == 'aws_s3':
+                    container_name = sl.get('bucket')
+                    container_from_bucket = True
+
             # Get connection info to filter by same connection
             connection_name = None
             if discovery.discovery_info and isinstance(discovery.discovery_info, dict):
@@ -98,12 +103,17 @@ class FolderBasedLineageService:
                 DataDiscovery.folder_path.isnot(None)
             )
             
-            # Filter by container if available (using JSON_EXTRACT for MySQL)
+            # Filter by container/bucket if available (Azure: $.container.name, S3: $.bucket)
             if container_name:
-                query = query.filter(
-                    func.json_extract(DataDiscovery.storage_location, '$.container.name') == container_name
-                )
-            
+                if container_from_bucket:
+                    query = query.filter(
+                        func.json_extract(DataDiscovery.storage_location, '$.bucket') == container_name
+                    )
+                else:
+                    query = query.filter(
+                        func.json_extract(DataDiscovery.storage_location, '$.container.name') == container_name
+                    )
+
             all_related = query.all()
             
             same_folder = []
@@ -180,7 +190,8 @@ class FolderBasedLineageService:
                     'current': folder_path,
                     'parent': parent_folder_pattern if parent_folder_pattern else None,
                     'depth': len(folder_parts)
-                }
+                },
+                'storage_type': 'aws_s3' if container_from_bucket else None,
             }
             
         except Exception as e:

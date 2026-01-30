@@ -19,7 +19,7 @@ from models import Asset, Connection, DataDiscovery
 from utils.helpers import handle_error, sanitize_connection_config
 from utils.shared_state import DISCOVERY_PROGRESS, DISCOVERY_PROGRESS_LOCK, try_start_lineage_job, finish_lineage_job
 from utils.azure_utils import AZURE_AVAILABLE
-from services.discovery_service import discover_oracle_assets, discover_assets
+from services.discovery_service import discover_oracle_assets, discover_assets, discover_s3_assets
 from flask import current_app
 
 logger = logging.getLogger(__name__)
@@ -201,11 +201,8 @@ def delete_connection(connection_id):
         if not connection:
             return jsonify({"error": "Connection not found"}), 404
 
-        # Build connector_id pattern
-        if connection.connector_type == 'azure_blob':
-            connector_id_pattern = f"azure_blob_{connection.name}"
-        else:
-            connector_id_pattern = f"{connection.connector_type}_{connection.name}"
+        # Build connector_id pattern (azure_blob, aws_s3, oracle_db, etc.)
+        connector_id_pattern = f"{connection.connector_type}_{connection.name}"
         
         asset_count = db.query(Asset).filter(Asset.connector_id == connector_id_pattern).count()
         
@@ -352,7 +349,9 @@ def test_connection_config():
             if not data:
                 return jsonify({"error": "Request body is required"}), 400
             config_data = data.get('config', {})
+            connector_type_hint = data.get('connector_type')
         else:
+            connector_type_hint = None
             config_json_str = request.args.get('config')
             if config_json_str:
                 try:
@@ -376,9 +375,33 @@ def test_connection_config():
                     'password': request.args.get('password'),
                 }
                 config_data = {k: v for k, v in config_data.items() if v is not None}
+            connector_type_hint = request.args.get('connector_type')
         
         if not config_data:
             return jsonify({"error": "Config is required. For GET, provide 'config' query param as JSON string or individual params"}), 400
+        
+        # AWS S3: when connector_type is aws_s3, always route to S3 (avoids misrouting to Azure)
+        if connector_type_hint == 'aws_s3':
+            ak = config_data.get('aws_access_key_id') or config_data.get('aws_access_key')
+            sk = config_data.get('aws_secret_access_key') or config_data.get('aws_secret_key')
+            if not ak or not sk:
+                return jsonify({
+                    "success": False,
+                    "message": "AWS Access Key ID and Secret Access Key are required for S3. Enter them in the Configuration step."
+                }), 200
+            config_data = {**config_data, 'aws_access_key_id': ak, 'aws_secret_access_key': sk}
+            try:
+                from utils.s3_client import create_s3_client, BOTO3_AVAILABLE
+                if not BOTO3_AVAILABLE:
+                    return jsonify({"success": False, "message": "boto3 not installed. pip install boto3"}), 400
+                s3_client = create_s3_client(config_data)
+                test_result = s3_client.test_connection()
+                return jsonify(test_result), 200
+            except ValueError as e:
+                return jsonify({"success": False, "message": str(e)}), 200
+            except Exception as e:
+                logger.error('FN:test_connection_config s3 error:{}'.format(str(e)), exc_info=True)
+                return jsonify({"success": False, "message": "Connection test failed: {}".format(str(e))}), 200
         
         # Check if this is an Oracle connection
         if ('host' in config_data and 'service_name' in config_data) or 'jdbc_url' in config_data:
@@ -395,6 +418,21 @@ def test_connection_config():
             except Exception as e:
                 logger.error('FN:test_connection_config oracle error:{}'.format(str(e)), exc_info=True)
                 return jsonify({"success": False, "message": f"Connection test failed: {str(e)}"}), 200
+        
+        # AWS S3 connection (access key auth)
+        if config_data.get('aws_access_key_id') and config_data.get('aws_secret_access_key'):
+            try:
+                from utils.s3_client import create_s3_client, BOTO3_AVAILABLE
+                if not BOTO3_AVAILABLE:
+                    return jsonify({"success": False, "message": "boto3 not installed. pip install boto3"}), 400
+                s3_client = create_s3_client(config_data)
+                test_result = s3_client.test_connection()
+                return jsonify(test_result), 200
+            except ValueError as e:
+                return jsonify({"success": False, "message": str(e)}), 200
+            except Exception as e:
+                logger.error('FN:test_connection_config s3 error:{}'.format(str(e)), exc_info=True)
+                return jsonify({"success": False, "message": "Connection test failed: {}".format(str(e))}), 200
         
         # Azure Blob connection
         if not AZURE_AVAILABLE:
@@ -540,30 +578,46 @@ def test_connection(connection_id):
 @connections_bp.route('/api/connections/<int:connection_id>/containers', methods=['GET'])
 @handle_error
 def list_containers(connection_id):
-    """List containers/file shares/queues/tables for a connection"""
-    if not AZURE_AVAILABLE:
-        return jsonify({"error": "Azure utilities not available"}), 503
-    
+    """List containers (Azure) or buckets (S3) for a connection"""
     db = SessionLocal()
     try:
         connection = db.query(Connection).filter(Connection.id == connection_id).first()
         if not connection:
             return jsonify({"error": "Connection not found"}), 404
         
-        if connection.connector_type != 'azure_blob':
-            return jsonify({"error": "This endpoint is only for Azure Blob connections"}), 400
-        
         config_data = connection.config or {}
+        
+        if connection.connector_type == 'aws_s3':
+            try:
+                from utils.s3_client import create_s3_client, BOTO3_AVAILABLE
+                if not BOTO3_AVAILABLE:
+                    return jsonify({"error": "boto3 not installed. pip install boto3"}), 503
+                s3_client = create_s3_client(config_data)
+                buckets = s3_client.list_buckets()
+                return jsonify({
+                    "containers": buckets,
+                    "file_shares": [],
+                    "queues": [],
+                    "tables": []
+                }), 200
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
+        
+        if connection.connector_type != 'azure_blob':
+            return jsonify({"error": "This endpoint is only for Azure Blob or AWS S3 connections"}), 400
+        
+        if not AZURE_AVAILABLE:
+            return jsonify({"error": "Azure utilities not available"}), 503
         
         try:
             from utils.azure_blob_client import create_azure_blob_client
             blob_client = create_azure_blob_client(config_data)
-            
             containers = blob_client.list_containers()
             file_shares = blob_client.list_file_shares()
             queues = blob_client.list_queues()
             tables = blob_client.list_tables()
-            
             return jsonify({
                 "containers": containers,
                 "file_shares": file_shares,
@@ -653,6 +707,60 @@ def discover_assets_stream(connection_id):
                     yield f"data: {json.dumps({'type': 'complete', 'message': final_msg, 'created': p.get('created_count', 0), 'updated': p.get('updated_count', 0), 'skipped': p.get('skipped_count', 0)})}\n\n"
                 except Exception:
                     yield f"data: {json.dumps({'type': 'complete', 'message': 'Discovery complete'})}\n\n"
+                return
+
+            # AWS S3 STREAMING
+            if connector_type == 'aws_s3':
+                try:
+                    from utils.s3_client import create_s3_client, BOTO3_AVAILABLE
+                    if not BOTO3_AVAILABLE:
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'boto3 not installed. pip install boto3'})}\n\n"
+                        return
+                    containers = request_data.get('containers', config_data.get('containers', []))
+                    folder_path = (request_data.get('folder_path') or config_data.get('folder_path') or '').strip().rstrip('/')
+                    if folder_path and not folder_path.endswith('/'):
+                        folder_path = folder_path + '/'
+                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Authenticating with AWS S3...', 'step': 'auth'})}\n\n"
+                    s3_client = create_s3_client(config_data)
+                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Authentication successful', 'step': 'auth_complete'})}\n\n"
+                    if not containers:
+                        yield f"data: {json.dumps({'type': 'progress', 'message': 'Discovering buckets...', 'step': 'containers'})}\n\n"
+                        buckets = s3_client.list_buckets()
+                        containers = [b['name'] for b in buckets]
+                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Found {len(containers)} bucket(s)', 'containers': containers})}\n\n"
+                    if not containers:
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'No buckets found'})}\n\n"
+                        return
+                    total_discovered = 0
+                    total_updated = 0
+                    total_skipped = 0
+                    for container_idx, bucket_name in enumerate(containers):
+                        yield f"data: {json.dumps({'type': 'container', 'container': bucket_name, 'message': f'Processing bucket {container_idx + 1}/{len(containers)}: {bucket_name}', 'container_index': container_idx + 1, 'total_containers': len(containers)})}\n\n"
+                        try:
+                            path_display = folder_path if folder_path else "root"
+                            yield f"data: {json.dumps({'type': 'progress', 'message': f'Listing objects in {bucket_name} (prefix: {path_display})...', 'container': bucket_name})}\n\n"
+                            objs = s3_client.list_objects(bucket_name=bucket_name, prefix=folder_path)
+                            yield f"data: {json.dumps({'type': 'progress', 'message': f'Found {len(objs)} objects in {bucket_name}', 'file_count': len(objs), 'container': bucket_name})}\n\n"
+                            if len(objs) > 0:
+                                yield f"data: {json.dumps({'type': 'progress', 'message': f'Processing {len(objs)} objects from {bucket_name}...', 'step': 'processing', 'container': bucket_name})}\n\n"
+                                for i, obj in enumerate(objs):
+                                    name = obj.get('name', 'unknown')
+                                    full_path = obj.get('full_path', name)
+                                    if len(objs) < 100 or i < 20 or (i + 1) % 50 == 0:
+                                        yield f"data: {json.dumps({'type': 'file', 'file': name, 'full_path': full_path, 'container': bucket_name, 'index': i + 1, 'total': len(objs)})}\n\n"
+                                    total_discovered += 1
+                                    if (i + 1) % 100 == 0 or (i + 1) == len(objs):
+                                        pct = round((i + 1) / len(objs) * 100) if len(objs) > 0 else 0
+                                        yield f"data: {json.dumps({'type': 'progress', 'message': f'Processed {i + 1}/{len(objs)} objects in {bucket_name} ({pct}%)', 'processed': i + 1, 'total': len(objs), 'percentage': pct, 'container': bucket_name})}\n\n"
+                            else:
+                                yield f"data: {json.dumps({'type': 'progress', 'message': f'No objects found in {bucket_name}', 'container': bucket_name})}\n\n"
+                        except Exception as e:
+                            logger.error('FN:discover_assets_stream aws_s3 bucket:{} error:{}'.format(bucket_name, str(e)), exc_info=True)
+                            yield f"data: {json.dumps({'type': 'error', 'message': f'Error processing bucket {bucket_name}: {str(e)}', 'container': bucket_name})}\n\n"
+                    yield f"data: {json.dumps({'type': 'complete', 'message': 'Discovery complete', 'discovered': total_discovered, 'updated': total_updated, 'skipped': total_skipped})}\n\n"
+                except Exception as e:
+                    logger.error('FN:discover_assets_stream aws_s3 error:{}'.format(str(e)), exc_info=True)
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
                 return
 
             # AZURE STREAMING
@@ -814,6 +922,10 @@ def discover_assets_route(connection_id):
     # Handle Oracle DB discovery
     if connector_type == 'oracle_db':
         return discover_oracle_assets(connection_id, connection_name, config_data, request.json or {})
+    
+    # AWS S3 discovery
+    if connector_type == 'aws_s3':
+        return discover_s3_assets(connection_id, connection_name, config_data, request.json or {})
     
     # Azure Blob discovery
     if connector_type != 'azure_blob':
@@ -1039,5 +1151,149 @@ def extract_azure_blob_lineage(connection_id):
             db.close()
     except Exception as e:
         logger.error(f'FN:extract_azure_blob_lineage error:{str(e)}', exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@connections_bp.route('/api/connections/<int:connection_id>/extract-s3-lineage', methods=['POST'])
+@handle_error
+def extract_s3_lineage(connection_id):
+    """Extract comprehensive AWS S3 lineage (folder hierarchy + ML inference). Runs in background."""
+    try:
+        db = SessionLocal()
+        try:
+            connection = db.query(Connection).filter(Connection.id == connection_id).first()
+            if not connection:
+                return jsonify({"error": "Connection not found"}), 404
+
+            if connection.connector_type != 'aws_s3':
+                return jsonify({"error": "This endpoint is only for AWS S3 connections"}), 400
+
+            connection_name = connection.name
+            connector_id = "aws_s3_{}".format(connection_name)
+
+            job_key = "s3:{}".format(connection_id)
+            if not try_start_lineage_job(job_key):
+                return jsonify({
+                    "success": True,
+                    "message": "S3 lineage extraction already running",
+                    "status": "already_running"
+                }), 202
+
+            def _extract_in_background():
+                try:
+                    from utils.s3_lineage_extractor import S3LineageExtractor
+                    from models import Asset, LineageRelationship
+                    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+                    db_bg = SessionLocal()
+                    try:
+                        s3_assets = db_bg.query(Asset).filter(
+                            Asset.connector_id == connector_id
+                        ).all()
+
+                        if not s3_assets:
+                            logger.info(
+                                "FN:extract_s3_lineage connection_id:{} no_assets_found".format(
+                                    connection_id
+                                )
+                            )
+                            return
+
+                        asset_map = {a.id: a for a in s3_assets}
+                        extractor = S3LineageExtractor()
+
+                        all_lineage = []
+                        try:
+                            folder_lineage = extractor._extract_folder_hierarchy_lineage(
+                                connector_id, asset_map
+                            )
+                            all_lineage.extend(folder_lineage)
+                            logger.info(
+                                "FN:extract_s3_lineage folder_hierarchy found:{} relationships".format(
+                                    len(folder_lineage)
+                                )
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "FN:extract_s3_lineage folder_hierarchy_error error:{}".format(
+                                    str(e)
+                                )
+                            )
+
+                        try:
+                            ml_lineage = extractor._extract_ml_inferred_lineage(
+                                connector_id, asset_map
+                            )
+                            all_lineage.extend(ml_lineage)
+                            logger.info(
+                                "FN:extract_s3_lineage ml_inference found:{} relationships".format(
+                                    len(ml_lineage)
+                                )
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "FN:extract_s3_lineage ml_inference_error error:{}".format(
+                                    str(e)
+                                )
+                            )
+
+                        seen = set()
+                        deduplicated = []
+                        for rel in all_lineage:
+                            key = (
+                                rel.get("source_asset_id"),
+                                rel.get("target_asset_id"),
+                                rel.get("source_job_id"),
+                            )
+                            if key not in seen:
+                                seen.add(key)
+                                deduplicated.append(rel)
+
+                        if deduplicated:
+                            LINEAGE_BATCH_SIZE = 500
+                            for i in range(0, len(deduplicated), LINEAGE_BATCH_SIZE):
+                                chunk = deduplicated[i : i + LINEAGE_BATCH_SIZE]
+                                try:
+                                    stmt = mysql_insert(LineageRelationship).values(
+                                        chunk
+                                    ).prefix_with("IGNORE")
+                                    db_bg.execute(stmt)
+                                    db_bg.commit()
+                                except Exception as e:
+                                    db_bg.rollback()
+                                    logger.warning(
+                                        "FN:extract_s3_lineage batch_failed batch:{} error:{}".format(
+                                            i // LINEAGE_BATCH_SIZE + 1, str(e)
+                                        )
+                                    )
+
+                            logger.info(
+                                "FN:extract_s3_lineage connection_id:{} created:{} relationships".format(
+                                    connection_id, len(deduplicated)
+                                )
+                            )
+                    finally:
+                        db_bg.close()
+                except Exception as e:
+                    logger.error(
+                        "FN:extract_s3_lineage background_error:{}".format(str(e)),
+                        exc_info=True,
+                    )
+                finally:
+                    finish_lineage_job(job_key)
+
+            thread = threading.Thread(target=_extract_in_background, daemon=True)
+            thread.start()
+
+            return jsonify({
+                "success": True,
+                "message": "S3 lineage extraction started in background",
+                "status": "started"
+            }), 202
+
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error("FN:extract_s3_lineage error:{}".format(str(e)), exc_info=True)
         return jsonify({"error": str(e)}), 500
 

@@ -328,6 +328,9 @@ class AzureBlobClient:
                 return self.get_blob_content(container_name, blob_path)
             
             max_footer_bytes = footer_size_kb * 1024  # Convert KB to bytes
+            # Wide Parquet tables (hundreds+ columns, many row-groups) can have very large footers.
+            # Allow up to 32MB when file reports it (same as S3) so schema is not truncated.
+            max_footer_cap = max(max_footer_bytes, 32 * 1024 * 1024)
             
             # Download last 8 bytes to read footer length
             last_8_bytes = None
@@ -414,24 +417,18 @@ class AzureBlobClient:
             try:
                 footer_length = struct.unpack('<I', last_8_bytes[0:4])[0]
                 
-                # Sanity check: footer length should be reasonable
-                if footer_length > max_footer_bytes * 10:  # More than 10x max is suspicious
-                    logger.warning('FN:get_parquet_footer blob_path:{} footer_length:{} message:Footer length seems too large, using max_footer_bytes'.format(blob_path, footer_length))
-                    footer_bytes = max_footer_bytes
-                elif footer_length == 0:
+                # Sanity check: cap at max_footer_cap (32MB) so we get full schema for wide tables
+                if footer_length == 0:
                     logger.warning('FN:get_parquet_footer blob_path:{} message:Footer length is 0, using max_footer_bytes'.format(blob_path))
                     footer_bytes = max_footer_bytes
+                elif footer_length > max_footer_cap:
+                    footer_bytes = min(max_footer_bytes, max_footer_cap)
                 else:
                     # Footer includes: footer_data + 4 bytes length + 4 bytes magic = footer_length + 8
                     actual_footer_size = footer_length + 8
-                    # Use the actual footer size, but cap at max_footer_bytes for safety
-                    footer_bytes = min(actual_footer_size, max_footer_bytes)
-                    
-                    # If actual footer is larger than max, log a warning
+                    footer_bytes = min(actual_footer_size, max_footer_cap)
                     if actual_footer_size > max_footer_bytes:
-                        logger.warning('FN:get_parquet_footer blob_path:{} actual_footer_size:{} max_footer_bytes:{} message:Footer larger than max, may be incomplete'.format(
-                            blob_path, actual_footer_size, max_footer_bytes
-                        ))
+                        logger.debug('FN:get_parquet_footer blob_path:{} actual_footer_size:{} message:Downloading full footer (within cap)'.format(blob_path, actual_footer_size))
             except Exception as e:
                 logger.warning('FN:get_parquet_footer blob_path:{} error:{} message:Failed to parse footer length, using max_footer_bytes'.format(blob_path, str(e)))
                 footer_bytes = max_footer_bytes

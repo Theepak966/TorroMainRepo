@@ -1075,20 +1075,20 @@ def discover_assets(connection_id):
                                         optimized_threshold = 5 * 1024 * 1024  # 5MB
 
                                         if file_size > optimized_threshold:
-                                            # MEDIUM/LARGE parquet: footer + first row group
+                                            # MEDIUM/LARGE parquet: footer + first row group (same as S3: 4096KB for wide schemas)
                                             file_sample = blob_client.get_parquet_footer_and_row_group(
                                                 container_name,
                                                 blob_path,
-                                                footer_size_kb=256,
+                                                footer_size_kb=4096,
                                                 row_group_size_mb=2
                                             )
                                             if not file_sample or len(file_sample) < 1000:
-                                                file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                                file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=4096)
                                         else:
                                             # SMALL parquet: download up to 5MB to allow PII sample inspection
                                             file_sample = blob_client.get_parquet_file_for_extraction(container_name, blob_path, max_size_mb=5)
                                             if not file_sample or len(file_sample) < 1000:
-                                                file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                                file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=4096)
 
                                         # Extract parquet schema + PII
                                         metadata = extract_file_metadata(enhanced_blob_info, file_sample)
@@ -1141,10 +1141,10 @@ def discover_assets(connection_id):
                                                 if not file_sample:
                                                     try:
                                                         file_sample = blob_client.get_parquet_footer_and_row_group(
-                                                            container_name, blob_path, footer_size_kb=256, row_group_size_mb=2
+                                                            container_name, blob_path, footer_size_kb=4096, row_group_size_mb=2
                                                         )
                                                         if not file_sample or len(file_sample) < 1000:
-                                                            file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=256)
+                                                            file_sample = blob_client.get_parquet_footer(container_name, blob_path, footer_size_kb=4096)
                                                     except Exception:
                                                         file_sample = None
                                                 refreshed_meta = extract_file_metadata(enhanced_blob_info, file_sample)
@@ -2072,6 +2072,420 @@ def discover_assets(connection_id):
             status="error",
             phase="error",
             message=f"Discovery failed: {str(e)}",
+            last_error=str(e),
+        )
+        return jsonify({"error": str(e)}), 400
+    finally:
+        db.close()
+
+
+def discover_s3_assets(
+    connection_id: int,
+    connection_name: str,
+    config_data: dict,
+    request_data: dict,
+):
+    """
+    Discover AWS S3 objects as assets.
+    Lists buckets (or uses provided), lists objects per bucket with optional prefix,
+    creates or updates Asset and DataDiscovery records.
+    """
+    try:
+        from utils.s3_client import create_s3_client, BOTO3_AVAILABLE
+        if not BOTO3_AVAILABLE:
+            return jsonify({"error": "boto3 not installed. pip install boto3"}), 503
+    except ImportError as e:
+        return jsonify({"error": "S3 client unavailable: {}".format(str(e))}), 503
+
+    req_containers = request_data.get("containers")
+    req_folder_path = request_data.get("folder_path")
+    containers = (
+        req_containers
+        if (req_containers is not None and len(req_containers) > 0)
+        else config_data.get("containers", [])
+    )
+    folder_path = (
+        req_folder_path
+        if (req_folder_path is not None and str(req_folder_path).strip() != "")
+        else config_data.get("folder_path", "") or ""
+    )
+    folder_path = (folder_path or "").strip().rstrip("/")
+    if folder_path and not folder_path.endswith("/"):
+        folder_path = folder_path + "/"
+
+    skip_deduplication = request_data.get("skip_deduplication", False)
+    pii_detector_version = os.getenv("PII_DETECTOR_VERSION", "1")
+
+    _set_discovery_progress(
+        connection_id,
+        status="running",
+        phase="discovering",
+        percent=0,
+        message="Starting S3 discovery...",
+        created_count=0,
+        updated_count=0,
+        skipped_count=0,
+    )
+
+    db = SessionLocal()
+    try:
+        s3_client = create_s3_client(config_data)
+        if not containers:
+            buckets = s3_client.list_buckets()
+            containers = [b["name"] for b in buckets]
+        if not containers:
+            _set_discovery_progress(
+                connection_id,
+                status="error",
+                phase="error",
+                message="No buckets found",
+            )
+            return jsonify({"error": "No buckets found"}), 400
+
+        connector_id = "aws_s3_{}".format(connection_name)
+        created_count = 0
+        updated_count = 0
+        skipped_count = 0
+        batch_size = int(os.getenv("DISCOVERY_BATCH_SIZE", "500"))
+        assets_to_add = []
+        discoveries_to_add = []
+        application_name = config_data.get("application_name") or connection_name
+
+        def _flush_batch():
+            nonlocal created_count, skipped_count, assets_to_add, discoveries_to_add
+            if not assets_to_add:
+                return
+            try:
+                db.bulk_insert_mappings(Asset, assets_to_add)
+                db.flush()
+                if discoveries_to_add:
+                    db.bulk_insert_mappings(DataDiscovery, discoveries_to_add)
+                db.commit()
+                created_count += len(assets_to_add)
+                logger.info(
+                    "FN:discover_s3_assets message:Committed batch of {} assets".format(
+                        len(assets_to_add)
+                    )
+                )
+            except Exception as e:
+                db.rollback()
+                logger.warning(
+                    "FN:discover_s3_assets message:Batch insert failed, falling back to individual inserts error:{}".format(
+                        str(e)
+                    )
+                )
+                for am, dm in zip(assets_to_add, discoveries_to_add):
+                    try:
+                        a = Asset(**am)
+                        db.add(a)
+                        db.flush()
+                        d = DataDiscovery(
+                            asset_id=a.id,
+                            storage_location=dm["storage_location"],
+                            file_metadata=dm["file_metadata"],
+                            schema_json=dm["schema_json"],
+                            schema_hash=dm["schema_hash"],
+                            status=dm["status"],
+                            approval_status=dm["approval_status"],
+                            discovered_at=dm["discovered_at"],
+                            folder_path=dm["folder_path"],
+                            data_source_type=dm["data_source_type"],
+                            environment=dm["environment"],
+                            discovery_info=dm["discovery_info"],
+                        )
+                        db.add(d)
+                        db.commit()
+                        created_count += 1
+                    except Exception:
+                        db.rollback()
+                        skipped_count += 1
+            assets_to_add = []
+            discoveries_to_add = []
+
+        existing_assets_map = {}
+        existing_assets_by_folder = {}
+        if not skip_deduplication and check_asset_exists:
+            try:
+                from utils.asset_deduplication import normalize_path
+                asset_count = db.query(func.count(Asset.id)).filter(
+                    Asset.connector_id == connector_id
+                ).scalar()
+                if asset_count and asset_count < 50000:
+                    for a in db.query(Asset).filter(Asset.connector_id == connector_id).all():
+                        tech = a.technical_metadata or {}
+                        loc = tech.get("location") or tech.get("storage_path") or ""
+                        nk = normalize_path(loc)
+                        if nk:
+                            existing_assets_map[nk] = {
+                                "id": a.id,
+                                "location": loc,
+                                "last_modified": tech.get("last_modified"),
+                            }
+                    for nk, info in existing_assets_map.items():
+                        loc = info.get("location") or ""
+                        parts = loc.replace("s3://", "").lstrip("/").split("/")
+                        if len(parts) >= 2:
+                            key = "/".join(parts[1:])
+                            folder = "/".join(key.split("/")[:-1]) if "/" in key else ""
+                        else:
+                            folder = ""
+                        if folder not in existing_assets_by_folder:
+                            existing_assets_by_folder[folder] = info
+            except Exception as e:
+                logger.warning("FN:discover_s3_assets message:Failed to pre-load existing assets error:{}".format(str(e)))
+
+        for bucket_name in containers:
+            try:
+                objs = s3_client.list_objects(bucket_name=bucket_name, prefix=folder_path)
+            except Exception as e:
+                logger.warning("FN:discover_s3_assets bucket:{} error:{}".format(bucket_name, str(e)))
+                continue
+
+            # Fetch bucket region and owner from AWS (used for technical_metadata when not per-object)
+            try:
+                bucket_region = s3_client.get_bucket_location(bucket_name)
+                bucket_owner = s3_client.get_bucket_owner(bucket_name)
+            except Exception as e:
+                bucket_region = None
+                bucket_owner = None
+                logger.debug("FN:discover_s3_assets bucket:{} message:Could not fetch location/owner error:{}".format(bucket_name, str(e)))
+
+            assets_in_folders = {}
+            for o in objs:
+                key = o.get("full_path") or o.get("key") or o.get("name", "")
+                if not key or key.endswith("/"):
+                    continue
+                folder = "/".join(key.split("/")[:-1]) if "/" in key else ""
+                if folder not in assets_in_folders:
+                    assets_in_folders[folder] = []
+                assets_in_folders[folder].append(o)
+
+            filtered = []
+            skipped_folders = 0
+            for folder, folder_objs in assets_in_folders.items():
+                parquet_only = [o for o in folder_objs if (o.get("name") or "").lower().endswith(".parquet") or (o.get("full_path") or o.get("key") or "").lower().endswith(".parquet")]
+                if not parquet_only:
+                    continue
+                latest = None
+                latest_ts = None
+                for o in parquet_only:
+                    lm = o.get("last_modified")
+                    if lm is None:
+                        continue
+                    ts = lm if isinstance(lm, datetime) else None
+                    if ts and (latest_ts is None or ts > latest_ts):
+                        latest_ts = ts
+                        latest = o
+                if not latest:
+                    latest = parquet_only[0]
+                    latest_ts = latest.get("last_modified")
+
+                if not skip_deduplication and folder in existing_assets_by_folder:
+                    ex = existing_assets_by_folder[folder]
+                    ex_lm = ex.get("last_modified")
+                    ex_ts = None
+                    if ex_lm:
+                        try:
+                            if isinstance(ex_lm, datetime):
+                                ex_ts = ex_lm
+                            elif isinstance(ex_lm, str):
+                                ex_ts = datetime.fromisoformat(ex_lm.replace("Z", "+00:00"))
+                        except Exception:
+                            pass
+                    if ex_ts and latest_ts and latest_ts <= ex_ts:
+                        skipped_folders += 1
+                        continue
+                filtered.append(latest)
+
+            logger.info(
+                "FN:discover_s3_assets bucket:{} original:{} filtered:{} skipped_folders:{} message:Latest parquet per folder".format(
+                    bucket_name, len(objs), len(filtered), skipped_folders
+                )
+            )
+
+            for obj in filtered:
+                key = obj.get("full_path") or obj.get("key") or obj.get("name", "")
+                if not key or key.endswith("/"):
+                    continue
+                storage_path = "s3://{}/{}".format(bucket_name, key)
+                normalized = key.strip("/").replace("/", "_").replace(" ", "_").replace(".", "_")
+                if len(normalized) > 200:
+                    normalized = normalized[-200:]
+                asset_id = "aws_s3_{}_{}_{}".format(connection_name, bucket_name, normalized)
+                name = obj.get("name") or key.split("/")[-1]
+                ext = name.split(".")[-1].lower() if "." in name else ""
+                asset_type = ext or "file"
+                last_modified = obj.get("last_modified")
+                lm_iso = last_modified.isoformat() if last_modified and hasattr(last_modified, "isoformat") else (str(last_modified) if last_modified else None)
+                size_bytes = obj.get("size", 0) or 0
+                folder_part = "/".join(key.split("/")[:-1]) if "/" in key else ""
+
+                blob_info = {
+                    "name": name,
+                    "size": size_bytes,
+                    "last_modified": last_modified,
+                    "created_at": None,
+                    "content_type": "application/octet-stream",
+                    "etag": obj.get("etag"),
+                    "full_path": key,
+                }
+
+                metadata = None
+                file_sample = None
+                _extract = extract_file_metadata
+                if _extract is None:
+                    try:
+                        from utils.metadata_extractor import extract_file_metadata as _extract
+                    except ImportError:
+                        _extract = None
+                if asset_type == "parquet" and _extract:
+                    try:
+                        if size_bytes > 5 * 1024 * 1024:
+                            file_sample = s3_client.get_parquet_footer_and_row_group(
+                                bucket_name, key, footer_size_kb=4096, row_group_size_mb=2
+                            )
+                            if not file_sample or len(file_sample) < 1000:
+                                file_sample = s3_client.get_parquet_footer(bucket_name, key, footer_size_kb=4096)
+                        else:
+                            file_sample = s3_client.get_parquet_file_for_extraction(bucket_name, key, max_size_mb=5)
+                            if not file_sample or len(file_sample) < 1000:
+                                file_sample = s3_client.get_parquet_footer(bucket_name, key, footer_size_kb=4096)
+                        metadata = _extract(blob_info, file_sample)
+                    except Exception as e:
+                        logger.warning("FN:discover_s3_assets key:{} parquet extraction error:{}".format(key, str(e)))
+
+                _gen_hash = generate_file_hash
+                if _gen_hash is None:
+                    try:
+                        from utils.metadata_extractor import generate_file_hash as _gen_hash
+                    except ImportError:
+                        _gen_hash = None
+                if not metadata:
+                    metadata = {
+                        "schema_json": {"columns": []},
+                        "file_hash": _gen_hash(b"") if _gen_hash else "",
+                        "schema_hash": "",
+                    }
+
+                schema_json = metadata.get("schema_json") or {"columns": []}
+                schema_hash = metadata.get("schema_hash") or hashlib.sha256("{}:{}".format(asset_id, lm_iso or "").encode()).hexdigest()
+                file_hash = metadata.get("file_hash") or (_gen_hash(b"") if _gen_hash else "")
+                columns = clean_for_json(schema_json.get("columns", [])) if clean_for_json else (schema_json.get("columns") or [])
+
+                aws_region = bucket_region or config_data.get("region_name") or config_data.get("region") or "us-east-1"
+                s3_uri = "s3://{}/{}".format(bucket_name, key)
+                arn = "arn:aws:s3:::{}/{}".format(bucket_name, key)
+                owner_id = obj.get("owner_id") or bucket_owner
+                technical_metadata = {
+                    "location": storage_path,
+                    "storage_path": storage_path,
+                    "bucket": bucket_name,
+                    "key": key,
+                    "size_bytes": size_bytes,
+                    "size": size_bytes,
+                    "last_modified": lm_iso,
+                    "storage_class": obj.get("storage_class"),
+                    "etag": obj.get("etag"),
+                    "service_type": "aws_s3",
+                    "schema_hash": schema_hash,
+                    "file_hash": file_hash,
+                    "owner": owner_id,
+                    "aws_region": aws_region,
+                    "s3_uri": s3_uri,
+                    "arn": arn,
+                    "format": asset_type,
+                    "type": asset_type,
+                }
+                business_metadata = {
+                    "application_name": application_name,
+                    "bucket": bucket_name,
+                    "key": key,
+                }
+                operational_metadata = {"last_updated_by": "aws_s3_discovery"}
+                if asset_type == "parquet":
+                    operational_metadata["pii_detector_version"] = str(pii_detector_version)
+
+                existing = check_asset_exists(db, connector_id, storage_path) if check_asset_exists else None
+                if existing:
+                    existing.technical_metadata = technical_metadata
+                    existing.business_metadata = business_metadata
+                    existing.columns = columns
+                    existing.operational_metadata = operational_metadata
+                    db.commit()
+                    updated_count += 1
+                    continue
+
+                asset_mapping = {
+                    "id": asset_id,
+                    "name": name,
+                    "type": asset_type,
+                    "catalog": connection_name,
+                    "connector_id": connector_id,
+                    "technical_metadata": technical_metadata,
+                    "operational_metadata": operational_metadata,
+                    "business_metadata": business_metadata,
+                    "columns": columns,
+                }
+                file_meta = metadata.get("file_metadata") or {
+                    "basic": {"name": name, "size_bytes": size_bytes, "format": asset_type},
+                    "timestamps": {"last_modified": lm_iso},
+                }
+                discovery_data = {
+                    "asset_id": asset_id,
+                    "storage_location": {"type": "aws_s3", "path": storage_path, "bucket": bucket_name, "key": key},
+                    "file_metadata": file_meta,
+                    "schema_json": schema_json,
+                    "schema_hash": schema_hash,
+                    "status": "pending",
+                    "approval_status": None,
+                    "discovered_at": datetime.utcnow(),
+                    "folder_path": folder_part,
+                    "data_source_type": "aws_s3",
+                    "environment": config_data.get("environment", "production"),
+                    "discovery_info": {
+                        "connection_id": connection_id,
+                        "connection_name": connection_name,
+                        "bucket": bucket_name,
+                        "discovered_by": "aws_s3_discovery",
+                    },
+                }
+                assets_to_add.append(asset_mapping)
+                discoveries_to_add.append(discovery_data)
+                if len(assets_to_add) >= batch_size:
+                    _flush_batch()
+
+        _flush_batch()
+
+        _set_discovery_progress(
+            connection_id,
+            status="done",
+            phase="done",
+            percent=100,
+            message="S3 discovery complete",
+            created_count=created_count,
+            updated_count=updated_count,
+            skipped_count=skipped_count,
+        )
+        total = created_count + updated_count
+        return jsonify({
+            "success": True,
+            "message": "Discovery complete: {} new, {} updated, {} skipped".format(
+                created_count, updated_count, skipped_count
+            ),
+            "discovered_count": total,
+            "created_count": created_count,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+            "services_discovered": {"containers": len(containers)},
+        }), 201
+    except Exception as e:
+        db.rollback()
+        logger.error("FN:discover_s3_assets error:{}".format(str(e)), exc_info=True)
+        _set_discovery_progress(
+            connection_id,
+            status="error",
+            phase="error",
+            message="Discovery failed: {}".format(str(e)),
             last_error=str(e),
         )
         return jsonify({"error": str(e)}), 400

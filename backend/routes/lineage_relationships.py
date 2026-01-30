@@ -18,6 +18,22 @@ from flask import current_app
 
 logger = logging.getLogger(__name__)
 
+
+def _source_label_from_connector(connector_id):
+    """Derive display label for container/folder nodes (e.g. AWS S3, Azure Blob Storage)."""
+    if not connector_id:
+        return "Unknown"
+    cid = (connector_id or "").strip().lower()
+    if cid.startswith("aws_s3"):
+        return "AWS S3"
+    if cid.startswith("oracle_db"):
+        return "Oracle DB"
+    if cid.startswith("azure_blob") or cid.startswith("azure_"):
+        return "Azure Blob Storage"
+    parts = cid.split("_")
+    return parts[0].capitalize() if parts else "Unknown"
+
+
 lineage_relationships_bp = Blueprint('lineage_relationships', __name__)
 
 @lineage_relationships_bp.route('/api/lineage/asset/<asset_id>/dataset-urn', methods=['GET'])
@@ -277,9 +293,19 @@ def get_asset_lineage(asset_id):
                 upstream_count = upstream_data.get('total_datasets', 0)
                 downstream_count = downstream_data.get('total_datasets', 0)
                 
-                # Build hierarchical folder structure nodes
+                # Build hierarchical folder structure nodes (include source_system so UI shows S3 Bucket / Azure Container)
                 hierarchy_nodes = []
                 hierarchy_edges = []
+                connector_id = getattr(asset, "connector_id", None) or ""
+                source_system = "Unknown"
+                if connector_id.startswith("aws_s3_"):
+                    source_system = "AWS S3"
+                elif connector_id.startswith("azure_blob_") or connector_id.startswith("azure_"):
+                    source_system = "Azure Blob Storage"
+                elif connector_id.startswith("oracle_db_"):
+                    source_system = "Oracle DB"
+                elif connector_id:
+                    source_system = (connector_id.split("_")[0] or "").capitalize() or "Unknown"
                 
                 if folder_lineage and 'error' not in folder_lineage:
                     hierarchy = folder_lineage.get('hierarchy', {})
@@ -295,7 +321,9 @@ def get_asset_lineage(asset_id):
                             "type": "container",
                             "catalog": None,
                             "is_selected": False,
-                            "node_type": "container"
+                            "node_type": "container",
+                            "source_system": source_system,
+                            "connector_id": connector_id or None,
                         })
                         node_ids.add(container_node_id)
                     
@@ -314,7 +342,9 @@ def get_asset_lineage(asset_id):
                             "catalog": None,
                             "is_selected": False,
                             "node_type": "folder",
-                            "full_path": current_path
+                            "full_path": current_path,
+                            "source_system": source_system,
+                            "connector_id": connector_id or None,
                         })
                         node_ids.add(folder_node_id)
                         
@@ -368,9 +398,105 @@ def get_asset_lineage(asset_id):
                         "hierarchy": folder_lineage.get('hierarchy') if folder_lineage and 'error' not in folder_lineage else None
                     }
                 }), 200
+
+            # No dataset_urn: return at least the asset and folder hierarchy so hierarchical view always shows something
+            fallback_connector_id = getattr(asset, 'connector_id', None)
+            fallback_source_system = _source_label_from_connector(fallback_connector_id)
+            if fallback_source_system == "Unknown" and folder_lineage and "error" not in folder_lineage:
+                storage_type = folder_lineage.get("storage_type") or ""
+                if storage_type == "aws_s3":
+                    fallback_source_system = "AWS S3"
+                elif storage_type in ("azure_blob", "azure"):
+                    fallback_source_system = "Azure Blob Storage"
+            nodes_fallback = [{
+                "id": asset.id,
+                "name": asset.name,
+                "type": asset.type,
+                "catalog": asset.catalog,
+                "connector_id": fallback_connector_id,
+                "is_selected": True
+            }]
+            edges_fallback = []
+            if folder_lineage and 'error' not in folder_lineage:
+                hierarchy = folder_lineage.get('hierarchy', {})
+                container_name = hierarchy.get('container') or None
+                path_parts = hierarchy.get('path_parts', []) or []
+                if container_name and container_name != 'unknown':
+                    nodes_fallback.insert(0, {
+                        "id": f"container_{container_name}",
+                        "name": container_name,
+                        "type": "container",
+                        "catalog": None,
+                        "is_selected": False,
+                        "node_type": "container",
+                        "source_system": fallback_source_system,
+                        "connector_id": fallback_connector_id,
+                    })
+                current_path = ""
+                parent_id = f"container_{container_name}" if (container_name and container_name != 'unknown') else None
+                for folder_part in path_parts:
+                    current_path = f"{current_path}/{folder_part}" if current_path else folder_part
+                    folder_node_id = f"folder_{current_path.replace('/', '_')}"
+                    nodes_fallback.insert(-1, {
+                        "id": folder_node_id,
+                        "name": folder_part,
+                        "type": "folder",
+                        "catalog": None,
+                        "is_selected": False,
+                        "node_type": "folder",
+                        "full_path": current_path,
+                        "source_system": fallback_source_system,
+                        "connector_id": fallback_connector_id,
+                    })
+                    if parent_id:
+                        edges_fallback.append({
+                            "id": f"{parent_id}-{folder_node_id}",
+                            "source": parent_id,
+                            "target": folder_node_id,
+                            "type": "contains",
+                            "column_lineage": [],
+                            "confidence_score": 1.0,
+                            "folder_based": True
+                        })
+                    parent_id = folder_node_id
+                if parent_id:
+                    edges_fallback.append({
+                        "id": f"{parent_id}-{asset.id}",
+                        "source": parent_id,
+                        "target": asset.id,
+                        "type": "contains",
+                        "column_lineage": [],
+                        "confidence_score": 1.0,
+                        "folder_based": True
+                    })
+                elif container_name and container_name != 'unknown':
+                    edges_fallback.append({
+                        "id": f"container_{container_name}-{asset.id}",
+                        "source": f"container_{container_name}",
+                        "target": asset.id,
+                        "type": "contains",
+                        "column_lineage": [],
+                        "confidence_score": 1.0,
+                        "folder_based": True
+                    })
+            return jsonify({
+                "asset": {
+                    "id": asset.id,
+                    "name": asset.name,
+                    "type": asset.type,
+                    "catalog": asset.catalog
+                },
+                "lineage": {
+                    "nodes": nodes_fallback,
+                    "edges": edges_fallback,
+                    "upstream_count": 0,
+                    "downstream_count": 0,
+                    "hierarchy": folder_lineage.get('hierarchy') if folder_lineage and 'error' not in folder_lineage else None
+                }
+            }), 200
         except Exception as lineage_error:
             logger.error(f"Failed to use new lineage system for asset {asset_id}: {lineage_error}")
-            # Return empty lineage if new system fails
+            # Return at least the asset so hierarchical view always shows something
             return jsonify({
                 "asset": {
                     "id": asset.id,

@@ -27,3 +27,6 @@ requests==2.31.0
 
 # Starburst / Trino client
 trino
+
+# AWS S3 connector
+boto3>=1.34.0

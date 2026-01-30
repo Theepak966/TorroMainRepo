@@ -79,14 +79,15 @@ if [ ! -z "$FRONTEND_PORT_PID" ]; then
     fi
 fi
 
-# Backend port 8099
+# Backend port 8099 (force kill so new Gunicorn can bind)
 BACKEND_PORT_PID=$(lsof -ti:8099 2>/dev/null)
 if [ ! -z "$BACKEND_PORT_PID" ]; then
     echo "Killing process on port 8099 (PID: $BACKEND_PORT_PID)..."
-    kill -TERM "$BACKEND_PORT_PID" 2>/dev/null
-    sleep 1
-    if kill -0 "$BACKEND_PORT_PID" 2>/dev/null; then
-        kill -9 "$BACKEND_PORT_PID" 2>/dev/null
+    kill -TERM $BACKEND_PORT_PID 2>/dev/null
+    sleep 2
+    if lsof -ti:8099 2>/dev/null; then
+        kill -9 $(lsof -ti:8099) 2>/dev/null
+        sleep 1
     fi
 fi
 

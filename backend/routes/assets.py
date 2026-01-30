@@ -34,6 +34,42 @@ except ImportError:
 assets_bp = Blueprint('assets', __name__)
 
 
+def _enrich_s3_technical_metadata(technical_metadata, connector_id):
+    """Backfill bucket, key, s3_uri, arn, aws_region for S3 assets when missing (e.g. discovered before these fields existed)."""
+    if not connector_id or not connector_id.startswith("aws_s3_"):
+        return technical_metadata
+    # Copy to plain dict (SQLAlchemy JSON may return mutable dict-like; ensure we can add keys)
+    raw = technical_metadata or {}
+    tech = dict(raw) if isinstance(raw, dict) else {}
+    bucket = tech.get("bucket")
+    key = tech.get("key") or tech.get("full_path")
+    # Derive bucket and key from location/storage_path (e.g. s3://bucket-name/path/to/key.parquet) if missing
+    if not bucket or not key:
+        loc = tech.get("location") or tech.get("storage_path") or ""
+        if isinstance(loc, str) and loc.startswith("s3://"):
+            rest = loc[5:].lstrip("/")  # after "s3://", keep leading slash for key
+            if "/" in rest:
+                b, k = rest.split("/", 1)
+                bucket = bucket or b
+                key = key or k
+            else:
+                bucket = bucket or rest
+                key = key or ""
+        if bucket:
+            tech["bucket"] = bucket
+        if key:
+            tech["key"] = key
+    if not bucket or not key:
+        return tech
+    if not tech.get("s3_uri"):
+        tech["s3_uri"] = "s3://{}/{}".format(bucket, key)
+    if not tech.get("arn"):
+        tech["arn"] = "arn:aws:s3:::{}/{}".format(bucket, key)
+    if not tech.get("aws_region"):
+        tech["aws_region"] = "us-east-1"
+    return tech
+
+
 def _quote_starburst_identifier(identifier: str) -> str:
     """
     Quote an identifier for Starburst/Trino using double quotes and escape inner quotes.
@@ -445,7 +481,9 @@ def get_assets():
                 
                 # Quality score calculation removed - data quality detection has been removed
                 operational_metadata = asset.operational_metadata or {}
-                
+                technical_metadata_single = _enrich_s3_technical_metadata(
+                    asset.technical_metadata, asset.connector_id
+                )
                 asset_data = {
                     "id": asset.id,
                     "name": asset.name,
@@ -453,7 +491,7 @@ def get_assets():
                     "catalog": asset.catalog,
                     "connector_id": asset.connector_id,
                     "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
-                    "technical_metadata": asset.technical_metadata,
+                    "technical_metadata": technical_metadata_single,
                     "operational_metadata": operational_metadata,
                     "business_metadata": asset.business_metadata,
                     "columns": normalize_columns(asset.columns or []),
@@ -483,56 +521,105 @@ def get_assets():
 
         # FAST PATH: minimal asset payload (used by lineage UI). Avoid expensive joins/counts.
         if minimal:
-            page = request.args.get('page', type=int) or 1
-            per_page = request.args.get('per_page', type=int) or 500
-            if page < 1:
-                return jsonify({"error": "Page must be >= 1"}), 400
-            if per_page < 1:
-                return jsonify({"error": "Per page must be >= 1"}), 400
-            if per_page > 1000:
-                per_page = 1000
-            offset = (page - 1) * per_page
+            try:
+                page = request.args.get('page', type=int) or 1
+                per_page = request.args.get('per_page', type=int) or 500
+                if page < 1:
+                    return jsonify({"error": "Page must be >= 1"}), 400
+                if per_page < 1:
+                    return jsonify({"error": "Per page must be >= 1"}), 400
+                if per_page > 1000:
+                    per_page = 1000
+                offset = (page - 1) * per_page
 
-            rows = (
-                db.query(
-                    Asset.id,
-                    Asset.name,
-                    Asset.type,
-                    Asset.catalog,
-                    Asset.connector_id,
-                    Asset.discovered_at,
-                    Asset.columns,
+                rows = (
+                    db.query(
+                        Asset.id,
+                        Asset.name,
+                        Asset.type,
+                        Asset.catalog,
+                        Asset.connector_id,
+                        Asset.discovered_at,
+                        Asset.columns,
+                    )
+                    .order_by(Asset.discovered_at.desc())
+                    .limit(per_page)
+                    .offset(offset)
+                    .all()
                 )
-                .order_by(Asset.discovered_at.desc())
-                .limit(per_page)
-                .offset(offset)
-                .all()
-            )
 
-            assets = []
-            for r in rows:
-                assets.append({
-                    "id": r.id,
-                    "name": r.name,
-                    "type": r.type,
-                    "catalog": r.catalog,
-                    "connector_id": r.connector_id,
-                    "discovered_at": r.discovered_at.isoformat() if r.discovered_at else None,
-                    "columns": normalize_columns(r.columns or []),
+                assets = []
+                connector_ids = set()
+                for r in rows:
+                    if r.connector_id:
+                        connector_ids.add((r.connector_id or "").strip())
+                    assets.append({
+                        "id": r.id,
+                        "name": r.name,
+                        "type": r.type,
+                        "catalog": r.catalog,
+                        "connector_id": r.connector_id,
+                        "discovered_at": r.discovered_at.isoformat() if r.discovered_at else None,
+                        "columns": normalize_columns(r.columns or []),
+                    })
+                # Map connector_id -> application_name from connection config
+                app_name_map = {}
+                conn_by_type_name = {}
+                if connector_ids:
+                    try:
+                        all_conns = db.query(Connection).filter(Connection.connector_type.isnot(None), Connection.name.isnot(None)).all()
+                        for conn in all_conns:
+                            ct = (conn.connector_type or "").strip()
+                            nm = (conn.name or "").strip()
+                            cfg = conn.config or {}
+                            an = cfg.get("application_name") or cfg.get("applicationName")
+                            if an:
+                                conn_by_type_name[(ct, nm)] = an
+                            cid = "{}_{}".format(ct, nm)
+                            if cid in connector_ids and an:
+                                app_name_map[cid] = an
+                            cid_raw = "{}_{}".format(conn.connector_type or "", conn.name or "")
+                            if cid_raw in connector_ids and an and cid_raw not in app_name_map:
+                                app_name_map[cid_raw] = an
+                        for cid in connector_ids:
+                            if cid in app_name_map:
+                                continue
+                            if "_" in cid:
+                                parts = cid.split("_", 2)
+                                if len(parts) >= 2:
+                                    if parts[0] == "aws" and parts[1] == "s3":
+                                        conn_type, conn_name = "aws_s3", (parts[2] if len(parts) > 2 else "")
+                                    elif parts[0] == "azure" and parts[1] == "blob":
+                                        conn_type, conn_name = "azure_blob", (parts[2] if len(parts) > 2 else "")
+                                    elif parts[0] == "oracle" and parts[1] == "db":
+                                        conn_type, conn_name = "oracle_db", (parts[2] if len(parts) > 2 else "")
+                                    else:
+                                        conn_type, conn_name = "_".join(parts[:-1]), parts[-1]
+                                    if conn_name:
+                                        an = conn_by_type_name.get((conn_type, conn_name))
+                                        if an:
+                                            app_name_map[cid] = an
+                    except Exception as e:
+                        logger.debug("FN:get_assets minimal application_name map error:%s", str(e))
+                for a in assets:
+                    cid_key = (a.get("connector_id") or "").strip() or a.get("connector_id")
+                    a["application_name"] = (app_name_map.get(cid_key) or app_name_map.get(a.get("connector_id"))) if cid_key else None
+
+                return jsonify({
+                    "assets": assets,
+                    "pagination": {
+                        "page": page,
+                        "per_page": per_page,
+                        # Intentionally omitted: "total" / "total_pages" (avoids expensive count)
+                        "total": None,
+                        "total_pages": None,
+                        "has_next": len(assets) == per_page,
+                        "has_prev": page > 1
+                    }
                 })
-
-            return jsonify({
-                "assets": assets,
-                "pagination": {
-                    "page": page,
-                    "per_page": per_page,
-                    # Intentionally omitted: "total" / "total_pages" (avoids expensive count)
-                    "total": None,
-                    "total_pages": None,
-                    "has_next": len(assets) == per_page,
-                    "has_prev": page > 1
-                }
-            })
+            except Exception as e:
+                logger.error("FN:get_assets minimal path error:%s", str(e), exc_info=True)
+                return jsonify({"error": "Failed to load assets", "detail": str(e) if current_app.config.get("DEBUG") else None}), 500
         
         # OPTIMIZATION 8: Optional pagination - backward compatible
         # If pagination params are provided, use them. Otherwise, return all (backward compatible)
@@ -729,6 +816,9 @@ def get_assets():
                             application_name = app_name
                             break
             
+            technical_metadata = _enrich_s3_technical_metadata(
+                asset.technical_metadata, asset.connector_id
+            )
             asset_data = {
             "id": asset.id,
             "name": asset.name,
@@ -736,7 +826,7 @@ def get_assets():
             "catalog": asset.catalog,
             "connector_id": asset.connector_id,
             "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
-            "technical_metadata": asset.technical_metadata,
+            "technical_metadata": technical_metadata,
             "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata,
             "columns": normalize_columns(asset.columns or []),
@@ -897,7 +987,28 @@ def get_asset_by_id(asset_id):
         # Quality score calculation removed - data quality detection has been removed
         operational_metadata = asset.operational_metadata or {}
         columns = normalize_columns(asset.columns or [])
-        
+        technical_metadata = _enrich_s3_technical_metadata(
+            asset.technical_metadata or {}, asset.connector_id
+        )
+        # Belt-and-suspenders: ensure S3 fields present when connector is S3 (SQLAlchemy JSON copy can miss keys)
+        if asset.connector_id and str(asset.connector_id).startswith("aws_s3_"):
+            tm_raw = asset.technical_metadata or {}
+            bucket = technical_metadata.get("bucket") or tm_raw.get("bucket")
+            key = technical_metadata.get("key") or tm_raw.get("key") or tm_raw.get("full_path")
+            if not bucket or not key:
+                loc = technical_metadata.get("location") or tm_raw.get("location") or tm_raw.get("storage_path") or ""
+                if isinstance(loc, str) and loc.startswith("s3://") and "/" in loc[5:].lstrip("/"):
+                    parts = loc[5:].lstrip("/").split("/", 1)
+                    bucket = bucket or parts[0]
+                    key = key or parts[1]
+            if bucket and key:
+                if not technical_metadata.get("s3_uri"):
+                    technical_metadata["s3_uri"] = "s3://{}/{}".format(bucket, key)
+                if not technical_metadata.get("arn"):
+                    technical_metadata["arn"] = "arn:aws:s3:::{}/{}".format(bucket, key)
+                if not technical_metadata.get("aws_region"):
+                    technical_metadata["aws_region"] = "us-east-1"
+
         result = {
             "id": asset.id,
             "name": asset.name,
@@ -907,7 +1018,7 @@ def get_asset_by_id(asset_id):
             "discovered_at": asset.discovered_at.isoformat() if asset.discovered_at else None,
             "columns": columns,
             "custom_columns": asset.custom_columns or {},
-            "technical_metadata": asset.technical_metadata or {},
+            "technical_metadata": technical_metadata,
             "operational_metadata": operational_metadata,
             "business_metadata": asset.business_metadata or {},
             "application_name": application_name  # From connection config
@@ -1407,36 +1518,7 @@ def ingest_asset_to_starburst(asset_id):
             role_catalog = (conn_cfg.get("role_catalog") or "system").strip() or "system"
             roles = {role_catalog: role_name}
 
-        # If requested, authenticate to Starburst first (so UI can show auth errors before SQL preview/ingest)
-        validate_connection = bool(payload.get("validate_connection", False))
-        if validate_connection:
-            if not host:
-                return jsonify({"error": "Starburst host is required to authenticate"}), 400
-            if not STARBURST_AVAILABLE:
-                return jsonify({"error": "Starburst/Trino client library (trino) is not installed on the server."}), 503
-            try:
-                test_starburst_connection(
-                    host=host,
-                    port=port,
-                    user=user,
-                    password=password,
-                    http_scheme=http_scheme,
-                    catalog=catalog,
-                    schema=schema,
-                    verify=verify_ssl,
-                    roles=roles,
-                )
-            except Exception as e:
-                logger.error(
-                    "FN:ingest_asset_to_starburst_auth_failed asset_id:%s host:%s port:%s error:%s",
-                    asset_id,
-                    host,
-                    port,
-                    str(e),
-                    exc_info=True,
-                )
-                return jsonify({"error": f"Starburst authentication failed: {str(e)}"}), 400
-
+        # Always generate masking view SQL first (no auth required) so it can be shown regardless of auth/ingest outcome
         try:
             # Derive analytical and operational view names from the base table / user input.
             if view_name_analytical and view_name_operational:
@@ -1512,16 +1594,56 @@ def ingest_asset_to_starburst(asset_id):
             "masking_summary_operational": operational_summary,
         }
 
+        # Optional: validate connection; on failure still return 200 with SQL so user can copy manually
+        validate_connection = bool(payload.get("validate_connection", False))
+        if validate_connection:
+            if not host:
+                response_data["success"] = False
+                response_data["error"] = "Starburst host is required to authenticate"
+                return jsonify(response_data), 200
+            if not STARBURST_AVAILABLE:
+                response_data["success"] = False
+                response_data["error"] = "Starburst/Trino client library (trino) is not installed on the server."
+                return jsonify(response_data), 200
+            try:
+                test_starburst_connection(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    http_scheme=http_scheme,
+                    catalog=catalog,
+                    schema=schema,
+                    verify=verify_ssl,
+                    roles=roles,
+                )
+            except Exception as e:
+                logger.error(
+                    "FN:ingest_asset_to_starburst_auth_failed asset_id:%s host:%s port:%s error:%s",
+                    asset_id,
+                    host,
+                    port,
+                    str(e),
+                    exc_info=True,
+                )
+                response_data["success"] = False
+                response_data["error"] = f"Starburst authentication failed: {str(e)}"
+                return jsonify(response_data), 200
+
         if preview_only:
             # Only return the generated SQL and masking summary, do not connect to Starburst
             return jsonify(response_data), 200
 
         # Ingest into Starburst Enterprise (execute CREATE OR REPLACE VIEW for both analytical and operational)
         if not STARBURST_AVAILABLE:
-            return jsonify({"error": "Starburst/Trino client library (trino) is not installed on the server."}), 503
+            response_data["success"] = False
+            response_data["error"] = "Starburst/Trino client library (trino) is not installed on the server."
+            return jsonify(response_data), 200
 
         if not host:
-            return jsonify({"error": "Starburst host is required to ingest the view"}), 400
+            response_data["success"] = False
+            response_data["error"] = "Starburst host is required to ingest the view"
+            return jsonify(response_data), 200
 
         try:
             # Determine the actual table name to use
@@ -1675,13 +1797,13 @@ def ingest_asset_to_starburst(asset_id):
                 else:
                     view_errors.append(f"Operational view creation failed: {error_msg}")
             
-            # If there were view creation errors, return them but don't fail completely
+            # If there were view creation errors, return SQL so user can copy and run manually
             if view_errors:
                 error_message = "Some views could not be created:\n" + "\n".join(view_errors)
                 logger.warning(f'FN:ingest_asset_to_starburst view_creation_errors: {error_message}')
-                # Still return success with warnings, or return error?
-                # For now, return error so user knows what happened
-                return jsonify({"error": error_message}), 400
+                response_data["success"] = False
+                response_data["error"] = error_message
+                return jsonify(response_data), 200
         except Exception as e:
             logger.error(
                 "FN:ingest_asset_to_starburst_execute asset_id:%s host:%s port:%s error:%s",
@@ -1691,7 +1813,9 @@ def ingest_asset_to_starburst(asset_id):
                 str(e),
                 exc_info=True,
             )
-            return jsonify({"error": f"Failed to create view in Starburst: {str(e)}"}), 400
+            response_data["success"] = False
+            response_data["error"] = f"Failed to create view in Starburst: {str(e)}"
+            return jsonify(response_data), 200
 
         response_data["ingested"] = True
         return jsonify(response_data), 200

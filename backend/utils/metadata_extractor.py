@@ -88,9 +88,27 @@ def extract_parquet_schema(file_content: bytes, include_pii_detection: bool = Fa
             if len(file_content) > 1000 and file_content[-4:] == b'PAR1':
                 logger.debug('FN:extract_parquet_schema message:Combined structure failed, attempting footer-only extraction error:{}'.format(str(e)))
                 try:
-                    # Try to extract footer from end (last 2MB should contain footer)
-                    footer_start = max(0, len(file_content) - 2 * 1024 * 1024)
-                    footer_only = file_content[footer_start:]
+                    # Prefer an exact footer slice using the Parquet footer length stored in the last 8 bytes:
+                    # [4 bytes footer_len (LE)] + b'PAR1'
+                    # This is critical for very wide schemas where footer can exceed 2MB.
+                    import struct
+                    footer_only = None
+                    try:
+                        footer_len = struct.unpack("<I", file_content[-8:-4])[0]
+                        # Sanity bounds: cap at 64MB to avoid pathological memory use while supporting
+                        # very large footers (e.g. many row-groups + wide schemas).
+                        max_footer = 64 * 1024 * 1024
+                        if 0 < footer_len <= max_footer:
+                            start = max(0, len(file_content) - (footer_len + 8))
+                            footer_only = file_content[start:]
+                    except Exception:
+                        footer_only = None
+
+                    # Fallback: take the last 8MB (older behavior was 2MB, which is too small for wide schemas)
+                    if footer_only is None:
+                        footer_start = max(0, len(file_content) - 8 * 1024 * 1024)
+                        footer_only = file_content[footer_start:]
+
                     if len(footer_only) >= 8 and footer_only[-4:] == b'PAR1':
                         parquet_file = pq.ParquetFile(io.BytesIO(footer_only))
                         logger.info('FN:extract_parquet_schema message:Successfully extracted schema from footer-only after combined structure failed')

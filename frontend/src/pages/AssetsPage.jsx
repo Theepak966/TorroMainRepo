@@ -98,7 +98,7 @@ const AssetsPage = () => {
   // Metadata visibility settings
   const [metadataSettingsOpen, setMetadataSettingsOpen] = useState(false);
   const [metadataSettingsTab, setMetadataSettingsTab] = useState(0);
-  const [metadataDataSourceType, setMetadataDataSourceType] = useState('azure'); // 'azure' or 'oracle'
+  const [metadataDataSourceType, setMetadataDataSourceType] = useState('azure'); // 'azure' | 'oracle' | 'aws_s3'
   
   // Export menu state
   const [exportAnchorEl, setExportAnchorEl] = useState(null);
@@ -166,6 +166,12 @@ const AssetsPage = () => {
       'Application Name': true,
       'File Extension': true,
       'Number of Rows': true,
+      // AWS S3 Object overview fields (fetched from AWS)
+      'Owner': true,
+      'AWS Region': true,
+      'Key': true,
+      'S3 URI': true,
+      'ARN': true,
       // Oracle DB fields (only those controlled by visibility)
       'Database Type': true,
       'Schema': true,
@@ -205,11 +211,13 @@ const AssetsPage = () => {
   // Define which fields belong to which data source type
   const technicalFieldsBySource = {
     azure: ['Asset ID', 'Last Modified', 'Creation Time', 'Type', 'Size', 'Format', 'Access Tier', 'ETAG', 'Content Type', 'Location', 'Application Name', 'File Extension', 'Number of Rows'],
+    aws_s3: ['Asset ID', 'Owner', 'AWS Region', 'Last Modified', 'Size', 'Type', 'Key', 'S3 URI', 'ARN', 'ETAG', 'File Extension', 'Number of Rows'],
     oracle: ['Asset ID', 'Database Type', 'Schema', 'Object Type', 'Table Name', 'View Name'],
   };
   
   const operationalFieldsBySource = {
     azure: ['Status', 'Owner', 'Last Modified', 'Last Accessed', 'Access Count', 'Data Source Type', 'Connector ID', 'Catalog', 'Discovered At', 'Discovery ID', 'Application Name'],
+    aws_s3: ['Status', 'Owner', 'Last Modified', 'Last Accessed', 'Access Count', 'Data Source Type', 'Connector ID', 'Catalog', 'Discovered At', 'Discovery ID', 'Application Name'],
     oracle: ['Object Status', 'Schema Owner', 'Last Analyzed', 'Last Refresh Date', 'Connector ID', 'Discovered At', 'Discovery ID', 'Application Name'],
   };
   
@@ -538,37 +546,18 @@ const AssetsPage = () => {
 
   const getDataSource = (connectorId) => {
     if (!connectorId) return 'Unknown';
-    
-    
-    if (connectorId.startsWith('azure_blob_')) {
-      return 'Azure Blob Storage';
-    }
-    
-    
-    if (connectorId.startsWith('azure_')) {
-      return 'Azure Storage';
-    }
-    
-    
-    if (connectorId.startsWith('oracle_db_')) {
-      return 'Oracle DB';
-    }
-    
-    
+    if (connectorId.startsWith('azure_blob_')) return 'Azure Blob Storage';
+    if (connectorId.startsWith('azure_')) return 'Azure Storage';
+    if (connectorId.startsWith('oracle_db_')) return 'Oracle DB';
+    if (connectorId.startsWith('aws_s3_')) return 'AWS S3';
     return connectorId;
   };
 
   const getDataSourceColor = (connectorId) => {
     if (!connectorId) return 'default';
-    
-    if (connectorId.startsWith('azure_blob_') || connectorId.startsWith('azure_')) {
-      return 'primary';
-    }
-    
-    if (connectorId.startsWith('oracle_db_')) {
-      return 'error';
-    }
-    
+    if (connectorId.startsWith('azure_blob_') || connectorId.startsWith('azure_')) return 'primary';
+    if (connectorId.startsWith('oracle_db_')) return 'error';
+    if (connectorId.startsWith('aws_s3_')) return 'warning';
     return 'default';
   };
 
@@ -691,17 +680,8 @@ const AssetsPage = () => {
         },
         body: JSON.stringify({
           preview_only: true,
-          validate_connection: true,
-          connection: {
-            host: starburstHost,
-            port: starburstPort ? Number(starburstPort) : 443,
-            user: starburstUser,
-            password: starburstPassword,
-            http_scheme: starburstHttpScheme,
-            verify_ssl: starburstVerifySsl,
-            role: starburstRole,
-            role_catalog: 'system',
-          },
+          validate_connection: false,
+          connection: {},
           catalog: starburstCatalog,
           schema: starburstSchema,
           table_name: starburstTableName,
@@ -711,13 +691,18 @@ const AssetsPage = () => {
       });
 
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to generate Starburst view SQL');
-      }
+      if (data.view_sql_analytical != null) setStarburstViewSqlAnalytical(data.view_sql_analytical || '');
+      if (data.view_sql_operational != null) setStarburstViewSqlOperational(data.view_sql_operational || '');
 
-      setStarburstViewSqlAnalytical(data.view_sql_analytical || '');
-      setStarburstViewSqlOperational(data.view_sql_operational || '');
-      setStarburstSuccess('Authenticated to Starburst and generated analytical + operational masking view SQL. Review below before ingesting.');
+      if (!response.ok) {
+        setStarburstError(data.error || 'Failed to generate Starburst view SQL');
+        return;
+      }
+      if (data.success) {
+        setStarburstSuccess('Generated masking view SQL for review. You can copy it below or click Ingest to Starburst to create the view.');
+      } else if (data.error) {
+        setStarburstError(data.error);
+      }
     } catch (error) {
       console.error('Error generating Starburst view SQL:', error);
       setStarburstError(error?.message || 'Failed to generate Starburst view SQL');
@@ -759,13 +744,18 @@ const AssetsPage = () => {
       });
 
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to ingest view into Starburst');
-      }
+      if (data.view_sql_analytical != null) setStarburstViewSqlAnalytical(data.view_sql_analytical || '');
+      if (data.view_sql_operational != null) setStarburstViewSqlOperational(data.view_sql_operational || '');
 
-      setStarburstViewSqlAnalytical(data.view_sql_analytical || '');
-      setStarburstViewSqlOperational(data.view_sql_operational || '');
-      setStarburstSuccess('Successfully created masked view in Starburst Enterprise.');
+      if (!response.ok) {
+        setStarburstError(data.error || 'Failed to ingest view into Starburst');
+        return;
+      }
+      if (data.success) {
+        setStarburstSuccess('Authentication successful and view created. Generated view for review below.');
+      } else {
+        setStarburstError(data.error ? `${data.error} You can copy the generated view below and run it manually.` : 'Ingest failed. You can copy the generated view below and run it manually.');
+      }
     } catch (error) {
       console.error('Error ingesting view into Starburst:', error);
       setStarburstError(error?.message || 'Failed to ingest view into Starburst');
@@ -1154,59 +1144,29 @@ const AssetsPage = () => {
   };
 
   const handleViewAsset = async (assetId) => {
-    // OPTIMIZED: First check if asset is already in state (instant - no API call)
-    const cachedAsset = allAssets.find(a => a.id === assetId);
-    
-    if (cachedAsset) {
-      // Asset already loaded - use it directly (instant!)
-      setSelectedAsset(cachedAsset);
-      setDetailsDialogOpen(true);
-      setSelectedColumns([]); // Reset selected columns when opening new asset
-      setShowColumnCheckboxes(false); // Hide checkboxes when opening new asset
-        setOriginalClassification(cachedAsset.business_metadata?.classification || 'internal');
-        setOriginalSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
-        setOriginalDepartment(cachedAsset.business_metadata?.department || 'Data Engineering');
-        setClassification(cachedAsset.business_metadata?.classification || 'internal');
-        setSensitivityLevel(cachedAsset.business_metadata?.sensitivity_level || 'medium');
-        setDepartment(cachedAsset.business_metadata?.department || 'Data Engineering');
-        
-        // Set default description
-        const defaultDesc = `Azure Blob Storage file: ${cachedAsset.name}`;
-        setDefaultDescription(defaultDesc);
-        
-        const desc = cachedAsset.business_metadata?.description || '';
-        setDescription(desc || defaultDesc);
-        setOriginalDescription(desc);
-      return; // Exit early - no API call needed!
-    }
-    
-    // Only fetch if asset not in state (rare case - asset not loaded yet)
+    // Always fetch full asset by id so we get backend-enriched technical_metadata (e.g. S3 URI, ARN, AWS Region, Owner)
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-      // OPTIMIZED: Fetch only the specific asset, not all assets
       const response = await fetch(`${API_BASE_URL}/api/assets/${assetId}`);
       if (response.ok) {
         const asset = await response.json();
         setSelectedAsset(asset);
         setDetailsDialogOpen(true);
-        setSelectedColumns([]); // Reset selected columns when opening new asset
-        setShowColumnCheckboxes(false); // Hide checkboxes when opening new asset
+        setSelectedColumns([]);
+        setShowColumnCheckboxes(false);
         setOriginalClassification(asset.business_metadata?.classification || 'internal');
         setOriginalSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
         setOriginalDepartment(asset.business_metadata?.department || 'Data Engineering');
         setClassification(asset.business_metadata?.classification || 'internal');
         setSensitivityLevel(asset.business_metadata?.sensitivity_level || 'medium');
         setDepartment(asset.business_metadata?.department || 'Data Engineering');
-        
-        // Set default description
         const defaultDesc = `Azure Blob Storage file: ${asset.name}`;
         setDefaultDescription(defaultDesc);
-        
         const desc = asset.business_metadata?.description || '';
         setDescription(desc || defaultDesc);
         setOriginalDescription(desc);
       } else {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         alert(`Failed to load asset: ${errorData.error || 'Asset not found'}`);
       }
     } catch (error) {
@@ -1869,17 +1829,21 @@ const AssetsPage = () => {
                   throw new Error('Failed to fetch connections');
                 }
                 
-                const connections = await connectionsResponse.json();
-                const azureConnections = connections.filter(conn => conn.connector_type === 'azure_blob');
-                
-                if (azureConnections.length === 0) {
-                  
+                const connectionsData = await connectionsResponse.json();
+                const list = Array.isArray(connectionsData)
+                  ? connectionsData
+                  : connectionsData?.connections || [];
+                const connectionsToRefresh = list.filter(
+                  (conn) =>
+                    conn.connector_type === 'azure_blob' || conn.connector_type === 'aws_s3'
+                );
+
+                if (connectionsToRefresh.length === 0) {
                   await fetchAssets();
                   return;
                 }
-                
-                
-                const discoveryPromises = azureConnections.map(async (connection) => {
+
+                const discoveryPromises = connectionsToRefresh.map(async (connection) => {
                   try {
                     const discoverResponse = await fetch(`${API_BASE_URL}/api/connections/${connection.id}/discover`, {
                       method: 'POST',
@@ -1931,7 +1895,9 @@ const AssetsPage = () => {
                 };
                 
                 // Wait for all discoveries to complete
-                const progressPromises = azureConnections.map(conn => pollDiscoveryProgress(conn.id));
+                const progressPromises = connectionsToRefresh.map((conn) =>
+                  pollDiscoveryProgress(conn.id)
+                );
                 await Promise.all(progressPromises);
                 
                 try {
@@ -2596,7 +2562,12 @@ const AssetsPage = () => {
                     fullWidth
                     variant="outlined"
                     startIcon={<Settings />}
-                    onClick={() => setMetadataSettingsOpen(true)}
+                    onClick={() => {
+                      if (selectedAsset?.connector_id?.startsWith('aws_s3_')) setMetadataDataSourceType('aws_s3');
+                      else if (selectedAsset?.connector_id?.startsWith('oracle_db') || selectedAsset?.technical_metadata?.database_type === 'oracle') setMetadataDataSourceType('oracle');
+                      else setMetadataDataSourceType('azure');
+                      setMetadataSettingsOpen(true);
+                    }}
                     sx={{ textTransform: 'none' }}
                   >
                     Settings
@@ -2690,10 +2661,15 @@ const AssetsPage = () => {
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        <Chip 
-                          label={getDataSource(asset.connector_id)} 
-                          size="small" 
+                        <Chip
+                          label={getDataSource(asset.connector_id)}
+                          size="small"
                           color={getDataSourceColor(asset.connector_id)}
+                          sx={
+                            asset.connector_id?.startsWith('aws_s3_')
+                              ? { backgroundColor: '#f9a825', color: 'rgba(0,0,0,0.87)' }
+                              : undefined
+                          }
                         />
                       </TableCell>
                       <TableCell>
@@ -3212,7 +3188,163 @@ const AssetsPage = () => {
                         </Grid>
                       );
                     }
-                    
+
+                    // AWS S3 Object overview (fetched from AWS)
+                    if (connectorId.startsWith('aws_s3_')) {
+                      const tm = technicalMetadata;
+                      const s3Owner = tm.owner || 'N/A';
+                      const s3Region = tm.aws_region || 'N/A';
+                      const s3LastModified = tm.last_modified || selectedAsset?.discovered_at || 'N/A';
+                      const s3Size = tm.size_bytes ?? tm.size ?? 0;
+                      const s3Type = selectedAsset?.type || tm.format || 'parquet';
+                      const s3Key = tm.key || tm.full_path || 'N/A';
+                      const s3Uri = tm.s3_uri || 'N/A';
+                      const s3Arn = tm.arn || 'N/A';
+                      const s3Etag = tm.etag || 'N/A';
+                      return (
+                        <Grid container spacing={2}>
+                          {metadataVisibility.technical['Asset ID'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Asset ID</Typography>
+                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
+                                    {safeAssetId}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['Owner'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Owner</Typography>
+                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
+                                    {s3Owner}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['AWS Region'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>AWS Region</Typography>
+                                  <Typography variant="body1">{s3Region}</Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['Last Modified'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Last modified</Typography>
+                                  <Typography variant="body1">
+                                    {s3LastModified !== 'N/A' && typeof s3LastModified === 'string'
+                                      ? new Date(s3LastModified).toLocaleString()
+                                      : s3LastModified !== 'N/A' ? new Date(s3LastModified).toLocaleString() : 'N/A'}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['Size'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Size</Typography>
+                                  <Typography variant="body1">{formatBytes(s3Size)}</Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['Type'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Type</Typography>
+                                  <Typography variant="body1">{String(s3Type).toLowerCase()}</Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['Key'] && (
+                            <Grid item xs={12}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Key</Typography>
+                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem', fontFamily: 'monospace' }}>
+                                    {s3Key}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['S3 URI'] && (
+                            <Grid item xs={12}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>S3 URI</Typography>
+                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem', fontFamily: 'monospace' }}>
+                                    {s3Uri}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['ARN'] && (
+                            <Grid item xs={12}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Amazon Resource Name (ARN)</Typography>
+                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem', fontFamily: 'monospace' }}>
+                                    {s3Arn}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {metadataVisibility.technical['ETAG'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Entity tag (Etag)</Typography>
+                                  <Typography variant="body1" sx={{ wordBreak: 'break-all', fontSize: '0.875rem' }}>
+                                    {s3Etag}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {technicalMetadata.num_rows > 0 && metadataVisibility.technical['Number of Rows'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>Number of Rows</Typography>
+                                  <Typography variant="body1">{Number(technicalMetadata.num_rows).toLocaleString()}</Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                          {(technicalMetadata.file_extension || selectedAsset?.name?.includes('.')) && metadataVisibility.technical['File Extension'] && (
+                            <Grid item xs={6}>
+                              <Card variant="outlined">
+                                <CardContent>
+                                  <Typography color="text.secondary" gutterBottom>File Extension</Typography>
+                                  <Typography variant="body1">
+                                    {technicalMetadata.file_extension || (selectedAsset?.name?.split('.').pop() || 'N/A')}
+                                  </Typography>
+                                </CardContent>
+                              </Card>
+                            </Grid>
+                          )}
+                        </Grid>
+                      );
+                    }
+
                     // Azure Blob Storage metadata (existing code)
                     const safeLocation = technicalMetadata.location || 'N/A';
                     // Application name removed from technical_metadata - now comes from connection config
@@ -4981,6 +5113,7 @@ const AssetsPage = () => {
                   onChange={(e) => setMetadataDataSourceType(e.target.value)}
                 >
                   <MenuItem value="azure">Azure Blob Storage</MenuItem>
+                  <MenuItem value="aws_s3">AWS S3</MenuItem>
                   <MenuItem value="oracle">Oracle Database</MenuItem>
                 </Select>
               </FormControl>
@@ -4991,10 +5124,10 @@ const AssetsPage = () => {
             {metadataSettingsTab === 0 && (
               <Box>
                 <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
-                  Toggle visibility of Technical Metadata fields ({metadataDataSourceType === 'azure' ? 'Azure Blob Storage' : 'Oracle Database'})
+                  Toggle visibility of Technical Metadata fields ({metadataDataSourceType === 'azure' ? 'Azure Blob Storage' : metadataDataSourceType === 'aws_s3' ? 'AWS S3' : 'Oracle Database'})
                 </Typography>
                 <FormGroup>
-                  {technicalFieldsBySource[metadataDataSourceType]
+                  {(technicalFieldsBySource[metadataDataSourceType] || technicalFieldsBySource.azure)
                     .filter(field => metadataVisibility.technical.hasOwnProperty(field))
                     .map((field) => (
                     <FormControlLabel
@@ -5025,10 +5158,10 @@ const AssetsPage = () => {
             {metadataSettingsTab === 1 && (
               <Box>
                 <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
-                  Toggle visibility of Operational Metadata fields ({metadataDataSourceType === 'azure' ? 'Azure Blob Storage' : 'Oracle Database'})
+                  Toggle visibility of Operational Metadata fields ({metadataDataSourceType === 'azure' ? 'Azure Blob Storage' : metadataDataSourceType === 'aws_s3' ? 'AWS S3' : 'Oracle Database'})
                 </Typography>
                 <FormGroup>
-                  {operationalFieldsBySource[metadataDataSourceType]
+                  {(operationalFieldsBySource[metadataDataSourceType] || operationalFieldsBySource.azure)
                     .filter(field => metadataVisibility.operational.hasOwnProperty(field))
                     .map((field) => (
                     <FormControlLabel

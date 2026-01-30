@@ -149,18 +149,18 @@ const CustomNode = ({ data }) => {
         </Typography>
       </Box>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-      <Chip 
-          label={data.type || 'Azure Blob Storage'} 
-        size="small" 
+      <Chip
+          label={data.type || 'Asset'}
+        size="small"
           variant="outlined"
-        sx={{ 
-            height: 24, 
+        sx={{
+            height: 24,
           fontSize: 11,
             borderColor: '#ccc',
             color: '#666',
             fontWeight: 500,
             minWidth: '50px'
-          }} 
+          }}
         />
       </Box>
     </Box>
@@ -196,6 +196,15 @@ const detectPII = (columnName, description) => {
   
   const combinedText = `${columnName} ${description || ''}`.toLowerCase();
   return piiPatterns.some(pattern => pattern.test(combinedText));
+};
+
+const getSourceLabel = (connectorId) => {
+  if (!connectorId) return 'Unknown';
+  if (connectorId.startsWith('aws_s3_')) return 'AWS S3';
+  if (connectorId.startsWith('oracle_db_')) return 'Oracle DB';
+  if (connectorId.startsWith('azure_blob_') || connectorId.startsWith('azure_')) return 'Azure Blob Storage';
+  const parts = connectorId.split('_');
+  return parts[0] ? parts[0].charAt(0).toUpperCase() + parts[0].slice(1) : 'Unknown';
 };
 
 const DataLineagePage = () => {
@@ -260,6 +269,7 @@ const DataLineagePage = () => {
       'Type': true,
       'Catalog': true,
       'Data Source': true,
+      'Application Name': true,
       'Discovered At': true,
     },
     columns: {
@@ -319,6 +329,30 @@ const DataLineagePage = () => {
   // Lineage extraction status removed - runs silently in background
   // Prevent request storms: only trigger extraction once per page load
   const extractionTriggeredRef = useRef(false);
+  // Ignore stale lineage responses when user switches assets quickly
+  const lineageRequestAssetIdRef = useRef(null);
+
+  // In-flight request cache: dedupe concurrent identical asset requests (avoids 502 from overload)
+  const assetsFetchCacheRef = useRef(new Map());
+
+  const fetchAssetsPage = useCallback(async (apiBaseUrl, page, perPage) => {
+    const url = `${apiBaseUrl}/api/assets?page=${page}&per_page=${perPage}&minimal=1`;
+    const cache = assetsFetchCacheRef.current;
+    if (cache.has(url)) {
+      return cache.get(url);
+    }
+    const promise = fetch(url)
+      .then((r) => {
+        cache.delete(url);
+        return r;
+      })
+      .catch((err) => {
+        cache.delete(url);
+        throw err;
+      });
+    cache.set(url, promise);
+    return promise;
+  }, []);
 
   const fetchAllAssets = async () => {
     try {
@@ -334,7 +368,7 @@ const DataLineagePage = () => {
       for (let page = 1; page <= maxPages; page++) {
         let resp;
         try {
-          resp = await fetch(`${API_BASE_URL}/api/assets?page=${page}&per_page=${perPage}&minimal=1`);
+          resp = await fetchAssetsPage(API_BASE_URL, page, perPage);
         } catch (pageError) {
           console.error(`Error fetching page ${page}:`, pageError);
           break;
@@ -384,10 +418,10 @@ const DataLineagePage = () => {
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       
-      // Step 1: Fetch first page of assets immediately (don't wait for all)
+      // Step 1: Fetch first page of assets immediately (share in-flight request with fetchAssets)
       let assets = [];
       try {
-        const firstResp = await fetch(`${API_BASE_URL}/api/assets?page=1&per_page=1000&minimal=1`);
+        const firstResp = await fetchAssetsPage(API_BASE_URL, 1, 1000);
         if (firstResp.ok) {
           const firstData = await firstResp.json();
           if (Array.isArray(firstData)) {
@@ -402,24 +436,26 @@ const DataLineagePage = () => {
       // Note: full asset loading is handled by fetchAssets() (single place) to avoid duplicate paging storms.
       
       if (assets && assets.length > 0) {
-        // Step 2: Check for Oracle and Azure Blob connections and trigger lineage extraction
+        // Step 2: Check for Oracle, Azure Blob, and AWS S3 connections and trigger lineage extraction
         const oracleConnections = new Set();
         const azureBlobConnections = new Set();
-        
+        const awsS3Connections = new Set();
+
         assets.forEach(asset => {
           if (asset.connector_id && asset.connector_id.startsWith('oracle_db_')) {
-            // Extract connection name from connector_id (format: oracle_db_ConnectionName)
             const parts = asset.connector_id.split('_');
             if (parts.length >= 3) {
-              const connectionName = parts.slice(2).join('_');
-              oracleConnections.add(connectionName);
+              oracleConnections.add(parts.slice(2).join('_'));
             }
           } else if (asset.connector_id && asset.connector_id.startsWith('azure_blob_')) {
-            // Extract connection name from connector_id (format: azure_blob_ConnectionName)
             const parts = asset.connector_id.split('_');
             if (parts.length >= 3) {
-              const connectionName = parts.slice(2).join('_');
-              azureBlobConnections.add(connectionName);
+              azureBlobConnections.add(parts.slice(2).join('_'));
+            }
+          } else if (asset.connector_id && asset.connector_id.startsWith('aws_s3_')) {
+            const parts = asset.connector_id.split('_');
+            if (parts.length >= 3) {
+              awsS3Connections.add(parts.slice(2).join('_'));
             }
           }
         });
@@ -435,10 +471,10 @@ const DataLineagePage = () => {
             const connectionsResp = await fetch(`${API_BASE_URL}/api/connections`);
             if (connectionsResp.ok) {
               const connections = await connectionsResp.json();
-              
+              const list = Array.isArray(connections) ? connections : connections?.connections || [];
               const oracleExtractionPromises = [];
-              for (const connection of connections) {
-                if (connection.connector_type === 'oracle_db' && 
+              for (const connection of list) {
+                if (connection.connector_type === 'oracle_db' &&
                     oracleConnections.has(connection.name)) {
                   // Trigger lineage extraction
                   const extractionPromise = fetch(`${API_BASE_URL}/api/connections/${connection.id}/extract-lineage`, {
@@ -474,42 +510,73 @@ const DataLineagePage = () => {
             const connectionsResp = await fetch(`${API_BASE_URL}/api/connections`);
             if (connectionsResp.ok) {
               const connections = await connectionsResp.json();
-              
+              const list = Array.isArray(connections) ? connections : connections?.connections || [];
               const azureExtractionPromises = [];
-              for (const connection of connections) {
-                if (connection.connector_type === 'azure_blob' && 
+              for (const connection of list) {
+                if (connection.connector_type === 'azure_blob' &&
                     azureBlobConnections.has(connection.name)) {
-                  // Trigger lineage extraction
                   const extractionPromise = fetch(`${API_BASE_URL}/api/connections/${connection.id}/extract-azure-lineage`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                   }).then(resp => {
-                    if (!resp.ok) {
-                      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-                    }
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
                     return resp.json();
-                  }).then(data => {
-                    // Silently log - no UI update
+                  }).then(() => {
                     console.log(`Azure Blob lineage extraction started for connection ${connection.id}`);
                   }).catch(err => {
-                    // Silently log error - no UI update
                     console.error(`Failed to trigger Azure Blob lineage extraction for connection ${connection.id}:`, err);
                   });
                   azureExtractionPromises.push(extractionPromise);
                 }
               }
-              // Wait for all Azure extractions to complete (but don't block UI)
               Promise.all(azureExtractionPromises).catch(() => {});
             }
           } catch (err) {
-            // Silently log error - no UI update
             console.error('Failed to trigger Azure Blob lineage extraction:', err);
           }
         }
+
+        // Step 5: Trigger lineage extraction for AWS S3 connections (only once, silently)
+        if (shouldTriggerExtraction && awsS3Connections.size > 0) {
+          try {
+            const connectionsResp = await fetch(`${API_BASE_URL}/api/connections`);
+            if (connectionsResp.ok) {
+              const connections = await connectionsResp.json();
+              const list = Array.isArray(connections) ? connections : connections?.connections || [];
+              const s3ExtractionPromises = [];
+              for (const connection of list) {
+                if (connection.connector_type === 'aws_s3' &&
+                    awsS3Connections.has(connection.name)) {
+                  const extractionPromise = fetch(`${API_BASE_URL}/api/connections/${connection.id}/extract-s3-lineage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                  }).then(resp => {
+                    if (resp.status === 404) {
+                      // Backend may not have been restarted with S3 lineage route yet
+                      return null;
+                    }
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+                    return resp.json();
+                  }).then((data) => {
+                    if (data !== null) {
+                      console.log(`S3 lineage extraction started for connection ${connection.id}`);
+                    }
+                  }).catch(err => {
+                    console.warn(`S3 lineage extraction for connection ${connection.id}:`, err.message || err);
+                  });
+                  s3ExtractionPromises.push(extractionPromise);
+                }
+              }
+              Promise.all(s3ExtractionPromises).catch(() => {});
+            }
+          } catch (err) {
+            console.error('Failed to trigger S3 lineage extraction:', err);
+          }
+        }
         
-        // Step 5: Cross-platform lineage extraction removed
+        // Step 6: Cross-platform lineage extraction removed
         
-        // Step 6: Fetch lineage relationships (fetch immediately, no wait)
+        // Step 7: Fetch lineage relationships (fetch immediately, no wait)
         let relationships = [];
         try {
           const relationshipsResp = await fetch(`${API_BASE_URL}/api/lineage/relationships`);
@@ -531,19 +598,7 @@ const DataLineagePage = () => {
         
         
         
-        const lineageNodes = assets.map(asset => {
-          
-          let sourceSystem = 'Unknown';
-          if (asset.connector_id) {
-            const parts = asset.connector_id.split('_');
-            if (parts[0] === 'azure' && parts[1] === 'blob') {
-              sourceSystem = 'Azure Blob Storage';
-            } else if (parts[0]) {
-              sourceSystem = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
-            }
-          }
-          
-          return {
+        const lineageNodes = assets.map(asset => ({
             id: asset.id,
             name: asset.name,
             type: asset.type || 'file',
@@ -551,9 +606,8 @@ const DataLineagePage = () => {
             schema: asset.schema || '',
             connector_id: asset.connector_id,
             columns: asset.columns || [],
-            source_system: sourceSystem,
-          };
-        });
+            source_system: getSourceLabel(asset.connector_id),
+          }));
         
         
         
@@ -642,8 +696,10 @@ const DataLineagePage = () => {
   };
 
   useEffect(() => {
-    fetchLineage();
-    fetchAssets();
+    (async () => {
+      await fetchLineage();
+      await fetchAssets();
+    })();
   }, []);
 
   // Rotate loading messages every 3 seconds when loading assets
@@ -1056,27 +1112,45 @@ const DataLineagePage = () => {
   const handleNodeClick = async (nodeId) => {
     try {
       setColumnPage(0);
-      
-      // Check node ID patterns FIRST (most reliable method)
+      const focusedAsset = selectedAssetForLineage
+        ? (assets.find((a) => a.id === selectedAssetForLineage || String(a.id) === String(selectedAssetForLineage)) ||
+            fullLineageData.rawData?.nodes?.find((n) => n.id === selectedAssetForLineage || String(n.id) === String(selectedAssetForLineage)))
+        : null;
+      let contextSource = getSourceLabel(focusedAsset?.connector_id);
+      if (contextSource === 'Unknown') {
+        const rawNodes = fullLineageData.rawData?.nodes || [];
+        const firstWithConnector = rawNodes.find((n) => n.connector_id && getSourceLabel(n.connector_id) !== 'Unknown');
+        contextSource = firstWithConnector ? getSourceLabel(firstWithConnector.connector_id) : contextSource;
+      }
+
       if (nodeId.startsWith('container_')) {
         const containerName = nodeId.replace('container_', '');
+        const rawNodes = fullLineageData.rawData?.nodes || [];
+        const containerFromApi = rawNodes.find((n) => (n.id === nodeId || String(n.id) === String(nodeId)) && (n.node_type === 'container' || n.type === 'container'));
+        const sourceFromApi = containerFromApi && (containerFromApi.source_system || getSourceLabel(containerFromApi.connector_id));
+        const displaySource = sourceFromApi && sourceFromApi !== 'Unknown' ? sourceFromApi : contextSource;
+        const containerType = displaySource === 'AWS S3' ? 'S3 Bucket' : displaySource === 'Azure Blob Storage' ? 'Azure Blob Storage Container' : 'Storage container';
         setSelectedNode({
           id: nodeId,
           name: containerName,
           type: 'Container',
           node_type: 'container',
-          description: `Azure Blob Storage Container: ${containerName}`,
+          description: `${containerType}: ${containerName}`,
           isContainer: true,
-          source_system: 'Azure Blob Storage',
-          connector_id: 'azure_blob_storage'
+          source_system: displaySource,
+          connector_id: containerFromApi?.connector_id ?? focusedAsset?.connector_id ?? null,
         });
         setDetailsDialogOpen(true);
         return;
       }
-      
+
       if (nodeId.startsWith('folder_')) {
         const folderPath = nodeId.replace('folder_', '').replace(/_/g, '/');
         const folderName = folderPath.split('/').pop() || folderPath;
+        const rawNodesForFolder = fullLineageData.rawData?.nodes || [];
+        const folderFromApi = rawNodesForFolder.find((n) => (n.id === nodeId || String(n.id) === String(nodeId)) && (n.node_type === 'folder' || n.type === 'folder'));
+        const folderSource = folderFromApi && (folderFromApi.source_system || getSourceLabel(folderFromApi.connector_id));
+        const displaySourceFolder = folderSource && folderSource !== 'Unknown' ? folderSource : contextSource;
         setSelectedNode({
           id: nodeId,
           name: folderName,
@@ -1085,36 +1159,35 @@ const DataLineagePage = () => {
           full_path: folderPath,
           description: `Folder in storage hierarchy: ${folderPath}`,
           isFolder: true,
-          source_system: 'Azure Blob Storage',
-          connector_id: 'azure_blob_storage'
+          source_system: displaySourceFolder,
+          connector_id: folderFromApi?.connector_id ?? focusedAsset?.connector_id ?? null,
         });
         setDetailsDialogOpen(true);
         return;
       }
-      
-      // Check if this is a container or folder node from the lineage
-      const lineageNode = fullLineageData.rawData?.nodes?.find(n => n.id === nodeId);
-      
+
+      const lineageNode = fullLineageData.rawData?.nodes?.find((n) => n.id === nodeId || String(n.id) === String(nodeId));
+
       if (lineageNode) {
         const nodeType = lineageNode.node_type || lineageNode.type;
-        
-        // Handle container nodes
+        const src = lineageNode.source_system || getSourceLabel(lineageNode.connector_id) || contextSource;
+        const containerType = src === 'AWS S3' ? 'S3 Bucket' : src === 'Azure Blob Storage' ? 'Azure Blob Storage Container' : 'Storage container';
+
         if (nodeType === 'container') {
           setSelectedNode({
             id: nodeId,
             name: lineageNode.name || nodeId,
             type: 'Container',
             node_type: 'container',
-            description: `Azure Blob Storage Container: ${lineageNode.name}`,
+            description: `${containerType}: ${lineageNode.name}`,
             isContainer: true,
-            source_system: 'Azure Blob Storage',
-            connector_id: 'azure_blob_storage'
+            source_system: src,
+            connector_id: lineageNode.connector_id || null,
           });
           setDetailsDialogOpen(true);
           return;
         }
-        
-        // Handle folder nodes
+
         if (nodeType === 'folder') {
           setSelectedNode({
             id: nodeId,
@@ -1124,38 +1197,33 @@ const DataLineagePage = () => {
             full_path: lineageNode.full_path || lineageNode.name,
             description: `Folder in storage hierarchy: ${lineageNode.full_path || lineageNode.name}`,
             isFolder: true,
-            source_system: 'Azure Blob Storage',
-            connector_id: 'azure_blob_storage'
+            source_system: src,
+            connector_id: lineageNode.connector_id || null,
           });
           setDetailsDialogOpen(true);
           return;
         }
       }
-      
-      // For regular assets, just open details dialog - DO NOT reload lineage
-      const asset = assets.find(a => a.id === nodeId);
-      
+
+      const asset = assets.find((a) => a.id === nodeId);
+
       if (asset) {
-        // Just open details dialog without reloading lineage
         setSelectedNode(asset);
         setDetailsDialogOpen(true);
+      } else if (lineageNode) {
+        setSelectedNode({
+          id: nodeId,
+          name: lineageNode.name || nodeId,
+          type: lineageNode.type || 'file',
+          catalog: lineageNode.catalog,
+          source_system: getSourceLabel(lineageNode.connector_id),
+          connector_id: lineageNode.connector_id,
+          error: 'Asset details not available',
+        });
+        setDetailsDialogOpen(true);
       } else {
-        // If not found in assets, try to get from lineage node
-        if (lineageNode) {
-          // Just open details dialog - DO NOT reload lineage
-          setSelectedNode({
-            id: nodeId,
-            name: lineageNode.name || nodeId,
-            type: lineageNode.type || 'Azure Blob Storage',
-            catalog: lineageNode.catalog,
-            error: 'Asset details not available'
-          });
-          setDetailsDialogOpen(true);
-        } else {
-          // If it looks like an asset ID but not found, just show error - DO NOT reload
-          setSelectedNode({ id: nodeId, name: nodeId, error: 'Asset details not found' });
-          setDetailsDialogOpen(true);
-        }
+        setSelectedNode({ id: nodeId, name: nodeId, error: 'Asset details not found' });
+        setDetailsDialogOpen(true);
       }
     } catch (error) {
       if (import.meta.env.DEV) {
@@ -1254,11 +1322,13 @@ const DataLineagePage = () => {
       setSelectedAssetForLineage(null);
       setNodes([]);
       setEdges([]);
+      lineageRequestAssetIdRef.current = null;
       return;
     }
 
     setSelectedAssetForLineage(assetId);
     setLoading(true);
+    lineageRequestAssetIdRef.current = assetId;
 
     try {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -1266,9 +1336,14 @@ const DataLineagePage = () => {
       // Use new lineage system endpoint
       const lineageResponse = await fetch(`${API_BASE_URL}/api/lineage/asset/${assetId}`);
       
+      // Ignore response if user already switched to another asset
+      if (lineageRequestAssetIdRef.current !== assetId) return;
+      
       if (lineageResponse.ok) {
         const lineageData = await lineageResponse.json();
-        const { nodes, edges, upstream_count, downstream_count } = lineageData.lineage;
+        const { nodes = [], edges = [] } = lineageData.lineage || {};
+        const upstream_count = lineageData.lineage?.upstream_count ?? 0;
+        const downstream_count = lineageData.lineage?.downstream_count ?? 0;
         
         // Generate impact analysis from lineage data (old endpoint removed)
         if (lineageData.lineage) {
@@ -1310,20 +1385,16 @@ const DataLineagePage = () => {
         if (lineageViewMode === 'actual') {
           // Actual lineage: Remove hierarchy nodes (containers, folders) and their edges
           // Keep only asset nodes and real lineage relationships
+          const str = (x) => String(x ?? '');
           filteredNodes = nodes.filter(node => {
-            const nodeId = node.id || '';
-            // Exclude container and folder nodes
+            const nodeId = str(node.id);
             return !nodeId.startsWith('container_') && !nodeId.startsWith('folder_');
           });
           
           filteredEdges = edges.filter(edge => {
-            // Exclude hierarchy edges (contains relationships)
-            if (edge.type === 'contains' || edge.folder_based) {
-              return false;
-            }
-            // Only include edges between actual assets (not hierarchy nodes)
-            const sourceIsAsset = !edge.source.startsWith('container_') && !edge.source.startsWith('folder_');
-            const targetIsAsset = !edge.target.startsWith('container_') && !edge.target.startsWith('folder_');
+            if (edge.type === 'contains' || edge.folder_based) return false;
+            const sourceIsAsset = !str(edge.source).startsWith('container_') && !str(edge.source).startsWith('folder_');
+            const targetIsAsset = !str(edge.target).startsWith('container_') && !str(edge.target).startsWith('folder_');
             return sourceIsAsset && targetIsAsset;
           });
         } else {
@@ -1555,6 +1626,7 @@ const DataLineagePage = () => {
       };
     });
 
+    if (lineageRequestAssetIdRef.current !== assetId) return;
     setNodes(flowNodes);
     setEdges(flowEdges);
     
@@ -1566,10 +1638,23 @@ const DataLineagePage = () => {
       rawData: { nodes, edges }
     }));
       } else {
-        
-        const rawNodes = fullLineageData.rawData?.nodes || [];
+        if (lineageRequestAssetIdRef.current !== assetId) return;
+        let rawNodes = fullLineageData.rawData?.nodes || [];
         const rawEdges = fullLineageData.rawData?.edges || [];
-        
+        // When API failed or no prior data: show at least the selected asset
+        if (rawNodes.length === 0) {
+          const fallbackAsset = assets?.find((a) => a.id === assetId || String(a.id) === String(assetId));
+          if (fallbackAsset) {
+            rawNodes = [{
+              id: fallbackAsset.id,
+              name: fallbackAsset.name,
+              type: fallbackAsset.type || 'file',
+              catalog: fallbackAsset.catalog,
+              connector_id: fallbackAsset.connector_id,
+              source_system: (fallbackAsset.connector_id || '').split('_').slice(0, 2).join('_')
+            }];
+          }
+        }
         const relatedNodeIds = new Set([assetId]);
         const upstreamEdges = rawEdges.filter(e => e.target === assetId);
         upstreamEdges.forEach(edge => {
@@ -1583,24 +1668,21 @@ const DataLineagePage = () => {
           const secondLevelDown = rawEdges.filter(e => e.source === edge.target);
           secondLevelDown.forEach(e2 => relatedNodeIds.add(e2.target));
         });
-        let filteredNodes = rawNodes.filter(n => relatedNodeIds.has(n.id));
-        let filteredEdges = rawEdges.filter(e => 
-          relatedNodeIds.has(e.source) && relatedNodeIds.has(e.target)
-        );
+        const idIn = (id) => relatedNodeIds.has(id) || relatedNodeIds.has(String(id));
+        let filteredNodes = rawNodes.filter((n) => idIn(n.id));
+        let filteredEdges = rawEdges.filter((e) => idIn(e.source) && idIn(e.target));
         
         // Apply lineage view mode filter
+        const strId = (x) => String(x ?? '');
         if (lineageViewMode === 'actual') {
-          filteredNodes = filteredNodes.filter(node => {
-            const nodeId = node.id || '';
+          filteredNodes = filteredNodes.filter((node) => {
+            const nodeId = strId(node.id);
             return !nodeId.startsWith('container_') && !nodeId.startsWith('folder_');
           });
-          
-          filteredEdges = filteredEdges.filter(edge => {
-            if (edge.type === 'contains' || edge.folder_based) {
-              return false;
-            }
-            const sourceIsAsset = !edge.source.startsWith('container_') && !edge.source.startsWith('folder_');
-            const targetIsAsset = !edge.target.startsWith('container_') && !edge.target.startsWith('folder_');
+          filteredEdges = filteredEdges.filter((edge) => {
+            if (edge.type === 'contains' || edge.folder_based) return false;
+            const sourceIsAsset = !strId(edge.source).startsWith('container_') && !strId(edge.source).startsWith('folder_');
+            const targetIsAsset = !strId(edge.target).startsWith('container_') && !strId(edge.target).startsWith('folder_');
             return sourceIsAsset && targetIsAsset;
           });
         }
@@ -1655,6 +1737,7 @@ const DataLineagePage = () => {
             onNodeClick: handleNodeClick,
           }
         }));
+        if (lineageRequestAssetIdRef.current !== assetId) return;
         setNodes(flowNodes);
         setEdges(filteredEdges);
         
@@ -1668,16 +1751,20 @@ const DataLineagePage = () => {
       }
     } catch (error) {
       console.error('Error fetching asset lineage:', error);
-      setNodes([]);
-      setEdges([]);
-      setFullLineageData(prev => ({
-        ...prev,
-        nodes: [],
-        edges: [],
-        rawData: { nodes: [], edges: [] }
-      }));
+      if (lineageRequestAssetIdRef.current === assetId) {
+        setNodes([]);
+        setEdges([]);
+        setFullLineageData(prev => ({
+          ...prev,
+          nodes: [],
+          edges: [],
+          rawData: { nodes: [], edges: [] }
+        }));
+      }
     } finally {
-      setLoading(false);
+      if (lineageRequestAssetIdRef.current === assetId) {
+        setLoading(false);
+      }
     }
   };
 
@@ -1685,20 +1772,19 @@ const DataLineagePage = () => {
   // Apply view mode filter first, then search/filter filters
   let baseFilteredNodes = selectedAssetForLineage ? nodes : [];
   let baseFilteredEdges = selectedAssetForLineage ? edges : [];
+  const nodeIdStr = (x) => String(x ?? '');
   
   // Apply lineage view mode filter
   if (selectedAssetForLineage && lineageViewMode === 'actual') {
     baseFilteredNodes = baseFilteredNodes.filter(node => {
-      const nodeId = node.id || '';
-      return !nodeId.startsWith('container_') && !nodeId.startsWith('folder_');
+      const id = nodeIdStr(node.id);
+      return !id.startsWith('container_') && !id.startsWith('folder_');
     });
     
     baseFilteredEdges = baseFilteredEdges.filter(edge => {
-      if (edge.type === 'contains' || edge.folder_based) {
-        return false;
-      }
-      const sourceIsAsset = !edge.source.startsWith('container_') && !edge.source.startsWith('folder_');
-      const targetIsAsset = !edge.target.startsWith('container_') && !edge.target.startsWith('folder_');
+      if (edge.type === 'contains' || edge.folder_based) return false;
+      const sourceIsAsset = !nodeIdStr(edge.source).startsWith('container_') && !nodeIdStr(edge.source).startsWith('folder_');
+      const targetIsAsset = !nodeIdStr(edge.target).startsWith('container_') && !nodeIdStr(edge.target).startsWith('folder_');
       return sourceIsAsset && targetIsAsset;
     });
   }
@@ -1798,24 +1884,13 @@ const DataLineagePage = () => {
           <Grid container spacing={2} alignItems="center">
             <Grid item xs={12} md={5}>
               <Autocomplete
-                options={dropdownAssets.map(a => {
-                  let sourceSystem = 'Unknown';
-                  if (a.connector_id) {
-                    const parts = a.connector_id.split('_');
-                    if (parts[0] === 'azure' && parts[1] === 'blob') {
-                      sourceSystem = 'Azure Blob Storage';
-                    } else if (parts[0]) {
-                      sourceSystem = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
-                    }
-                  }
-                  return ({
-                    id: a.id,
-                    label: `${a.name} (${a.type})`,
-                    name: a.name,
-                    type: a.type,
-                    source: sourceSystem,
-                  });
-                })}
+                options={dropdownAssets.map(a => ({
+                  id: a.id,
+                  label: `${a.name} (${a.type})`,
+                  name: a.name,
+                  type: a.type,
+                  source: getSourceLabel(a.connector_id),
+                }))}
                 value={dropdownAssets.find(n => n.id === selectedAssetForLineage) ? {
                   id: selectedAssetForLineage,
                   label: dropdownAssets.find(n => n.id === selectedAssetForLineage)?.name,
@@ -1935,13 +2010,8 @@ const DataLineagePage = () => {
                     fullWidth
                     variant={lineageViewMode === 'hierarchical' ? 'contained' : 'outlined'}
                     color={lineageViewMode === 'hierarchical' ? 'primary' : 'default'}
-                    onClick={async () => {
-                      setLineageViewMode('hierarchical');
-                      // Reload lineage when switching modes
-                      if (selectedAssetForLineage) {
-                        await handleAssetSelection(selectedAssetForLineage);
-                      }
-                    }}
+                    onClick={() => setLineageViewMode('hierarchical')}
+                    disabled={loading}
                     size="small"
                   >
                     Hierarchical
@@ -1956,13 +2026,8 @@ const DataLineagePage = () => {
                     fullWidth
                     variant={lineageViewMode === 'actual' ? 'contained' : 'outlined'}
                     color={lineageViewMode === 'actual' ? 'primary' : 'default'}
-                    onClick={async () => {
-                      setLineageViewMode('actual');
-                      // Reload lineage when switching modes
-                      if (selectedAssetForLineage) {
-                        await handleAssetSelection(selectedAssetForLineage);
-                      }
-                    }}
+                    onClick={() => setLineageViewMode('actual')}
+                    disabled={loading}
                     size="small"
                   >
                     Dependency Lineage
@@ -1995,38 +2060,25 @@ const DataLineagePage = () => {
                     zIndex: idx === loadingMessageIndex ? 1 : 0
                   }}
                 >
-                  <Typography 
-                    variant="h6" 
-                    sx={{ 
-                      fontWeight: 500, 
-                      color: 'text.primary',
-                      mb: 1
-                    }}
-                  >
+                  <Typography variant="h6" sx={{ fontWeight: 500, color: 'text.primary', mb: 1 }}>
                     {msg.title}
                   </Typography>
-                  <Typography 
-                    variant="body2" 
-                    sx={{ 
-                      color: 'text.secondary', 
-                      mb: 1
-                    }}
-                  >
+                  <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
                     {msg.description}
                   </Typography>
-                  <Typography 
-                    variant="caption" 
-                    sx={{ 
-                      color: 'text.secondary',
-                      display: 'block',
-                      fontStyle: 'italic'
-                    }}
-                  >
+                  <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontStyle: 'italic' }}>
                     {msg.detail}
                   </Typography>
                 </Box>
               ))}
             </Box>
+          </Box>
+        ) : loading && selectedAssetForLineage ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', gap: 2 }}>
+            <CircularProgress size={48} />
+            <Typography variant="body1" color="text.secondary">
+              Loading lineage for selected asset…
+            </Typography>
           </Box>
         ) : !selectedAssetForLineage ? (
           <Box sx={{ 
@@ -2323,11 +2375,15 @@ const DataLineagePage = () => {
                   />
                     )}
                     {detailVisibility.basic['Data Source'] && (
-                  <Chip 
-                    label={selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || selectedAssetDetails.connector_id || 'Azure Blob Storage'} 
-                    size="medium" 
+                  <Chip
+                    label={getSourceLabel(selectedAssetDetails.connector_id) || selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || 'Unknown'}
+                    size="medium"
                     variant="outlined"
-                    sx={{ height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }}
+                    sx={
+                      selectedAssetDetails.connector_id?.startsWith('aws_s3_')
+                        ? { height: 32, fontSize: 13, borderColor: '#f9a825', backgroundColor: '#f9a825', color: 'rgba(0,0,0,0.87)', fontWeight: 500 }
+                        : { height: 32, fontSize: 13, borderColor: '#ccc', color: '#666', fontWeight: 500 }
+                    }
                   />
                     )}
                 </Box>
@@ -2341,6 +2397,17 @@ const DataLineagePage = () => {
                   <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12, color: '#666' }}>
                     {selectedAssetDetails.catalog || 'N/A'}
                       </Typography>
+                </Box>
+                )}
+
+                {detailVisibility.basic['Application Name'] && (
+                <Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                    Application Name
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontSize: 12, color: '#666' }}>
+                    {selectedAssetDetails.application_name || selectedAssetDetails.business_metadata?.application_name || selectedAssetDetails.technical_metadata?.application_name || 'N/A'}
+                  </Typography>
                 </Box>
                 )}
 
@@ -2640,7 +2707,15 @@ const DataLineagePage = () => {
                             Source System
                           </Typography>
                           <Typography variant="body2" sx={{ fontSize: 12, color: '#333' }}>
-                            {selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || selectedAssetDetails.connector_id || 'Azure Blob Storage'}
+                            {getSourceLabel(selectedAssetDetails.connector_id) || selectedAssetDetails.source_system || selectedAssetDetails.technical_metadata?.source_system || 'Unknown'}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="body2" color="text.secondary" sx={{ fontSize: 12, fontWeight: 500, mb: 0.5 }}>
+                            Application Name
+                          </Typography>
+                          <Typography variant="body2" sx={{ fontSize: 12, color: '#333' }}>
+                            {selectedAssetDetails.application_name || selectedAssetDetails.business_metadata?.application_name || selectedAssetDetails.technical_metadata?.application_name || 'N/A'}
                           </Typography>
                         </Box>
                         <Box>
@@ -3192,13 +3267,11 @@ const DataLineagePage = () => {
                       size="small" 
                       color={selectedNode.isContainer ? 'secondary' : selectedNode.isFolder ? 'info' : 'primary'} 
                     />
-                    <Chip 
-                      label={selectedNode.isContainer || selectedNode.isFolder 
-                        ? 'Azure Blob Storage' 
-                        : (selectedNode.source_system || selectedNode.connector_id || 'Azure Blob Storage')} 
-                      size="small" 
+                    <Chip
+                      label={selectedNode.source_system || getSourceLabel(selectedNode.connector_id) || 'Unknown'}
+                      size="small"
                       variant="outlined"
-                      sx={{ 
+                      sx={{
                         borderColor: '#999',
                         color: '#555',
                         backgroundColor: '#f5f5f5',
@@ -3230,7 +3303,7 @@ const DataLineagePage = () => {
                       Type
                     </Typography>
                     <Typography variant="body1">
-                      Azure Blob Storage Container
+                      {selectedNode.source_system === 'AWS S3' ? 'S3 Bucket' : selectedNode.source_system === 'Azure Blob Storage' ? 'Azure Blob Storage Container' : 'Storage container'}
                     </Typography>
                   </Grid>
                   <Grid item xs={12}>
@@ -3238,7 +3311,7 @@ const DataLineagePage = () => {
                       Description
                     </Typography>
                     <Typography variant="body1">
-                      {selectedNode.description || 'Storage container in Azure Blob Storage'}
+                      {selectedNode.description || 'Storage container'}
                     </Typography>
                   </Grid>
                 </Grid>
@@ -3276,6 +3349,16 @@ const DataLineagePage = () => {
                       {selectedNode.description || 'Folder in the storage hierarchy'}
                     </Typography>
                   </Grid>
+                  {selectedNode.source_system && (
+                  <Grid item xs={12}>
+                    <Typography variant="subtitle2" color="text.secondary">
+                      Data Source
+                    </Typography>
+                    <Typography variant="body1">
+                      {selectedNode.source_system}
+                    </Typography>
+                  </Grid>
+                  )}
                 </Grid>
               ) : (
                 <Grid container spacing={3}>
@@ -3300,7 +3383,15 @@ const DataLineagePage = () => {
                       Source System
                     </Typography>
                     <Typography variant="body2">
-                      {selectedNode.source_system || selectedNode.connector_id || 'Azure Blob Storage'}
+                      {selectedNode.source_system || getSourceLabel(selectedNode.connector_id) || 'Unknown'}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="subtitle2" color="text.secondary">
+                      Application Name
+                    </Typography>
+                    <Typography variant="body2">
+                      {selectedNode.application_name || selectedNode.business_metadata?.application_name || selectedNode.technical_metadata?.application_name || 'N/A'}
                     </Typography>
                   </Grid>
                   <Grid item xs={12}>
@@ -3612,9 +3703,9 @@ const DataLineagePage = () => {
                       <TableBody>
                         {impactAnalysis.dependencies.map((dep) => (
                           <TableRow key={dep.id || dep.name}>
-                            <TableCell>{dep.name || 'Azure Blob Storage'}</TableCell>
+                            <TableCell>{dep.name || '—'}</TableCell>
                             <TableCell>
-                              <Chip label={dep.type || 'Azure Blob Storage'} size="small" variant="outlined" />
+                              <Chip label={dep.type || '—'} size="small" variant="outlined" />
                             </TableCell>
                             <TableCell>
                               <Chip 
