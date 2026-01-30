@@ -651,58 +651,76 @@ def get_assets():
         approval_status_filter = request.args.getlist('approval_status')
         application_name_filter = request.args.getlist('application_name')
 
-        from sqlalchemy import case, func, or_
-        
-        # Get latest *visible* discovery IDs for all assets (for joining).
-        # This ensures assets don't disappear just because their newest discovery was hidden.
-        latest_discovery_subq = db.query(
-            DataDiscovery.asset_id,
-            func.max(DataDiscovery.id).label('latest_discovery_id')
-        ).filter(
-            DataDiscovery.asset_id.isnot(None),
-            DataDiscovery.is_visible.is_(True),
-        ).group_by(DataDiscovery.asset_id).subquery()
-        
-        # Build base query
-        query = db.query(Asset, DataDiscovery).outerjoin(
-            latest_discovery_subq, Asset.id == latest_discovery_subq.c.asset_id
-        ).outerjoin(
-            DataDiscovery, DataDiscovery.id == latest_discovery_subq.c.latest_discovery_id
-        )
+        from sqlalchemy import and_, case, func, or_
 
-        # Hide assets that have discoveries but none of them are visible (e.g. deduplicated-away).
-        # Still allow assets with no discovery record at all (e.g., non-DataDiscovery sources).
-        # Logic: Show assets if they have a visible discovery OR they have no discoveries at all
-        from sqlalchemy import and_
-        # Subquery to find assets that have any discoveries
-        assets_with_any_discovery = (
-            db.query(DataDiscovery.asset_id)
-            .filter(DataDiscovery.asset_id.isnot(None))
-            .distinct()
-            .subquery()
-        )
-        
-        # Use LEFT JOIN to check if asset has any discoveries
-        query = query.outerjoin(
-            assets_with_any_discovery,
-            Asset.id == assets_with_any_discovery.c.asset_id
-        )
-        
-        # Filter: Show if has visible discovery OR has no discoveries at all
-        query = query.filter(
-            or_(
-                DataDiscovery.id.isnot(None),  # Has visible discovery
-                and_(
-                    DataDiscovery.id.is_(None),  # No visible discovery
-                    assets_with_any_discovery.c.asset_id.is_(None)  # No discoveries at all
+        def _build_assets_listing_id_query():
+            """
+            Build an efficient, paginatable query that returns (asset_id, latest_visible_discovery_id).
+
+            Why:
+            - The previous implementation selected *all* Asset + DataDiscovery columns and then ordered
+              the joined result set. On larger datasets, MySQL can exhaust sort buffer memory and
+              return: "Out of sort memory, consider increasing server sort buffer size".
+            - This query keeps the ordered row width tiny (two integers), then we fetch the full
+              Asset and DataDiscovery rows in follow-up queries after pagination.
+            """
+            latest_visible_discovery_subq = (
+                db.query(
+                    DataDiscovery.asset_id.label("asset_id"),
+                    func.max(DataDiscovery.id).label("latest_discovery_id"),
+                )
+                .filter(
+                    DataDiscovery.asset_id.isnot(None),
+                    DataDiscovery.is_visible.is_(True),
+                )
+                .group_by(DataDiscovery.asset_id)
+                .subquery()
+            )
+
+            assets_with_any_discovery_subq = (
+                db.query(DataDiscovery.asset_id.label("asset_id"))
+                .filter(DataDiscovery.asset_id.isnot(None))
+                .distinct()
+                .subquery()
+            )
+
+            id_query = (
+                db.query(
+                    Asset.id.label("asset_id"),
+                    latest_visible_discovery_subq.c.latest_discovery_id.label("latest_discovery_id"),
+                )
+                .outerjoin(
+                    latest_visible_discovery_subq,
+                    Asset.id == latest_visible_discovery_subq.c.asset_id,
+                )
+                .outerjoin(
+                    assets_with_any_discovery_subq,
+                    Asset.id == assets_with_any_discovery_subq.c.asset_id,
+                )
+                .filter(
+                    or_(
+                        latest_visible_discovery_subq.c.latest_discovery_id.isnot(None),
+                        and_(
+                            latest_visible_discovery_subq.c.latest_discovery_id.is_(None),
+                            assets_with_any_discovery_subq.c.asset_id.is_(None),
+                        ),
+                    )
+                )
+                .order_by(
+                    Asset.discovered_at.desc(),
+                    case((latest_visible_discovery_subq.c.latest_discovery_id.is_(None), 1), else_=0),
+                    latest_visible_discovery_subq.c.latest_discovery_id.desc(),
                 )
             )
-        )
+
+            return id_query, latest_visible_discovery_subq
+
+        id_query, latest_visible_discovery_subq = _build_assets_listing_id_query()
         
         # Apply filters at database level (before pagination)
         if search_term:
             search_lower = f"%{search_term.lower()}%"
-            query = query.filter(
+            id_query = id_query.filter(
                 or_(
                     Asset.name.ilike(search_lower),
                     Asset.catalog.ilike(search_lower)
@@ -710,10 +728,10 @@ def get_assets():
             )
         
         if type_filter:
-            query = query.filter(Asset.type.in_(type_filter))
+            id_query = id_query.filter(Asset.type.in_(type_filter))
         
         if catalog_filter:
-            query = query.filter(Asset.catalog.in_(catalog_filter))
+            id_query = id_query.filter(Asset.catalog.in_(catalog_filter))
         
         # Apply JSON field filters using MySQL JSON functions
         if approval_status_filter:
@@ -733,7 +751,7 @@ def get_assets():
                 status_conditions.append(condition)
             
             if status_conditions:
-                query = query.filter(or_(*status_conditions))
+                id_query = id_query.filter(or_(*status_conditions))
         
         if application_name_filter:
             from sqlalchemy import text
@@ -761,23 +779,31 @@ def get_assets():
                 app_conditions.append(combined_condition)
             
             if app_conditions:
-                query = query.filter(or_(*app_conditions))
-        
-        # Apply ordering
-        query = query.order_by(
-            Asset.discovered_at.desc(),
-            case((DataDiscovery.id.is_(None), 1), else_=0),
-            DataDiscovery.id.desc()
-        )
-        
-        # Get filtered count (for pagination) - must be done after filters
-        total_count = query.count()
-        
-        # Apply pagination if requested
+                id_query = id_query.filter(or_(*app_conditions))
+
+        # Get filtered count (for pagination) after all filters.
+        # Remove ORDER BY for the count query to avoid unnecessary sort work.
+        total_count = id_query.order_by(None).count()
+
+        # Apply pagination if requested (still only selecting tiny rows).
         if use_pagination:
-            assets_with_discovery = query.limit(per_page).offset(offset).all()
+            page_rows = id_query.limit(per_page).offset(offset).all()
         else:
-            assets_with_discovery = query.all()
+            page_rows = id_query.all()
+
+        asset_ids_in_order = [r.asset_id for r in page_rows]
+        latest_discovery_ids_in_order = [r.latest_discovery_id for r in page_rows]
+
+        assets_by_id = {}
+        if asset_ids_in_order:
+            assets = db.query(Asset).filter(Asset.id.in_(asset_ids_in_order)).all()
+            assets_by_id = {a.id: a for a in assets}
+
+        discoveries_by_id = {}
+        latest_discovery_ids = [d_id for d_id in latest_discovery_ids_in_order if d_id]
+        if latest_discovery_ids:
+            discoveries = db.query(DataDiscovery).filter(DataDiscovery.id.in_(latest_discovery_ids)).all()
+            discoveries_by_id = {d.id: d for d in discoveries}
         
         result = []
         seen_asset_ids = set()
@@ -794,7 +820,13 @@ def get_assets():
         except Exception as e:
             logger.warning('FN:get_assets error_fetching_connections:{}'.format(str(e)))
         
-        for asset, discovery in assets_with_discovery:
+        for asset_id, discovery_id in zip(asset_ids_in_order, latest_discovery_ids_in_order):
+            asset = assets_by_id.get(asset_id)
+            discovery = discoveries_by_id.get(discovery_id) if discovery_id else None
+
+            if not asset:
+                # Defensive: if an asset was deleted between the ID query and the fetch.
+                continue
 
             if asset.id in seen_asset_ids:
                 continue
